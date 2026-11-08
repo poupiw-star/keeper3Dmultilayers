@@ -21,6 +21,7 @@
 #include "map_data.h"
 #include "globals.h"
 #include "map_columns.h"
+#include "map_layers.h"
 #include "bflib_math.h"
 #include "slab_data.h"
 #include "config_terrain.h"
@@ -889,6 +890,7 @@ void init_map_size(LevelNumber lvnum)
         set_map_size(DEFAULT_MAP_SIZE, DEFAULT_MAP_SIZE);
     else
         set_map_size(lvinfo->mapsize_x,lvinfo->mapsize_y);
+    init_map_layers(lvnum);
 }
 
 /******************************************************************************/

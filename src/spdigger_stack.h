@@ -59,6 +59,7 @@ enum SpecialDiggerDigTaskKinds {
     SDDigTask_DigEarth,
     SDDigTask_MineGold,
     SDDigTask_MineGems,
+    SDDigTask_DigLayerFloor, /**< Dungeon layers: the floor under a tile, keyed by the tile's first subtile. */
 };
 
 enum ThingForRoomPickabilityFlags {

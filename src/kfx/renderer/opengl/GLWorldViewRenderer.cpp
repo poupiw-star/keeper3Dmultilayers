@@ -887,7 +887,7 @@ void GLWorldViewRenderer::append_shadow_quad(const struct BucketKindCreatureShad
         cmd.u[i] = (float)pts[i]->U / 65536.0f / (float)k_kspr_decode_dim;
         cmd.v[i] = (float)pts[i]->V / 65536.0f / (float)k_kspr_decode_dim;
     }
-    cmd.z_ndc   = 2.0f * (float)sh->bucket_idx / (float)(BUCKETS_COUNT - 1) - 1.0f;
+    cmd.z_ndc   = bucket_ndc((float)sh->bucket_idx);
     // dist_sq is clamped to [16,31] by create_shadows() -- approximate linear falloff (closer = darker). 
     // Todo make configurable?
     const float dist_sq = (float)sh->vertex_first.S;
@@ -1429,6 +1429,18 @@ void GLWorldViewRenderer::BeginWorldPass(int w, int h, int vp_x, int vp_y)
 
 /******************************************************************************/
 
+/**
+ * Depth for a bucket index. Lists of other dungeon layers (seen through pits) get thin bands behind
+ * everything of the viewer's layer, the first-drawn (farthest) layer furthest back, in order within each band.
+ */
+float GLWorldViewRenderer::bucket_ndc(float bucket) const
+{
+    const float t = bucket / (float)(BUCKETS_COUNT - 1);
+    if (m_layer_pass >= 0)
+        return 0.99f + 0.0025f * (float)(MAX_MAP_LAYERS - 2 - m_layer_pass) + 0.0024f * t;
+    return 2.0f * t - 1.0f;
+}
+
 bool GLWorldViewRenderer::append_triangle(int tile_id,
                                            const struct PolyPoint* p0,
                                            const struct PolyPoint* p1,
@@ -1448,7 +1460,7 @@ bool GLWorldViewRenderer::append_triangle(int tile_id,
 
     // Derive NDC depth from the painter's-algorithm bucket index:
     //   high bi (far away) -> z near +1.0; low bi (close) -> z near -1.0.
-    const float z_ndc = 2.0f * (float)m_current_bucket / (float)(BUCKETS_COUNT - 1) - 1.0f;
+    const float z_ndc = bucket_ndc((float)m_current_bucket);
     const float layer = (float)variation;
 
     WorldVertex* const verts = verts_vec.data();
@@ -1805,7 +1817,7 @@ void GLWorldViewRenderer::BeginWorldSpriteCapture(int32_t bucket_idx)
         bucket_idx = 0;
     // Biased half a bucket closer to the camera so sprites always pass the
     // depth test against same-bucket ground polygons.
-    m_current_sprite_z = 2.0f * ((float)bucket_idx - 0.5f) / (float)(BUCKETS_COUNT - 1) - 1.0f;
+    m_current_sprite_z = bucket_ndc((float)bucket_idx - 0.5f);
     m_current_sprite_sort_key = ((uint64_t)bucket_idx << 32) | m_sprite_entry_seq++;
 }
 
@@ -2618,11 +2630,16 @@ void GLWorldViewRenderer::DrawIsometricView()
     } item;
     struct Camera *cam;
 
+    // Other dungeon layers seen through pits first (farthest first), then the viewer's layer.
+    for (int pass = 0; pass <= layer_pass_count; pass++)
+    {
+    m_layer_pass = (pass < layer_pass_count) ? pass : -1;
+    struct BasicQ **bucket_list = (pass < layer_pass_count) ? layer_buckets[layer_pass_order[pass]] : buckets;
     for (long bucket_num = BUCKETS_COUNT - 1; bucket_num > 0; bucket_num--)
     {
         m_current_bucket = (int)bucket_num;
 
-        for (item.b = buckets[bucket_num]; item.b != NULL; item.b = item.b->next)
+        for (item.b = bucket_list[bucket_num]; item.b != NULL; item.b = item.b->next)
         {
             switch (item.b->kind)
             {
@@ -2659,7 +2676,7 @@ void GLWorldViewRenderer::DrawIsometricView()
             }
             case QK_RoomFlagBottomPole: // Room-flag pole
             {
-                const float ndc_z = 2.0f * ((float)m_current_bucket - 0.5f) / (float)(BUCKETS_COUNT - 1) - 1.0f;
+                const float ndc_z = bucket_ndc((float)m_current_bucket - 0.5f);
                 RendererSetWorldOverlayFlat(ndc_z);
                 draw_engine_room_flagpole(item.roomFlag);
                 RendererClearWorldOverlayFlat();
@@ -2667,7 +2684,7 @@ void GLWorldViewRenderer::DrawIsometricView()
             }
             case QK_RoomFlagStatusBox: // Room-flag top status box
             {
-                const float ndc_z = 2.0f * ((float)m_current_bucket - 0.5f) / (float)(BUCKETS_COUNT - 1) - 1.0f;
+                const float ndc_z = bucket_ndc((float)m_current_bucket - 0.5f);
                 RendererSetWorldOverlayFlat(ndc_z);
                 draw_engine_room_flag_top(item.roomFlag);
                 RendererClearWorldOverlayFlat();
@@ -2675,7 +2692,7 @@ void GLWorldViewRenderer::DrawIsometricView()
             }
             case QK_FloatingGoldText: // Floating gold/damage/experience numbers
             {
-                const float ndc_z = 2.0f * ((float)m_current_bucket - 0.5f) / (float)(BUCKETS_COUNT - 1) - 1.0f;
+                const float ndc_z = bucket_ndc((float)m_current_bucket - 0.5f);
                 RendererSetWorldOverlayFlat(ndc_z);
                 draw_engine_number(item.floatingGoldText);
                 RendererClearWorldOverlayFlat();
@@ -2683,7 +2700,7 @@ void GLWorldViewRenderer::DrawIsometricView()
             }
             case QK_CreatureStatus: // Health-flower/anger/state icon above a creature.
             {
-                const float ndc_z = 2.0f * ((float)m_current_bucket - 0.5f) / (float)(BUCKETS_COUNT - 1) - 1.0f;
+                const float ndc_z = bucket_ndc((float)m_current_bucket - 0.5f);
                 RendererSetWorldOverlay(ndc_z);
                 draw_status_sprites(item.creatureStatus->x, item.creatureStatus->y, item.creatureStatus->thing);
                 RendererClearWorldOverlay();
@@ -2701,7 +2718,7 @@ void GLWorldViewRenderer::DrawIsometricView()
             {
                 // fudge the position of the slab selector to look more like CPU
                 const float true_bucket = (float)m_current_bucket + 2.0f;
-                const float ndc_z = 2.0f * (true_bucket - 0.5f) / (float)(BUCKETS_COUNT - 1) - 1.0f;
+                const float ndc_z = bucket_ndc(true_bucket - 0.5f);
                 RendererSetWorldOverlay(ndc_z);
                 draw_clipped_line(item.slabSelector->p.X, item.slabSelector->p.Y,
                                   item.slabSelector->p.U, item.slabSelector->p.V,
@@ -2715,6 +2732,8 @@ void GLWorldViewRenderer::DrawIsometricView()
             }
         }
     }
+    }
+    m_layer_pass = -1;
 
     gpu_flush();
 

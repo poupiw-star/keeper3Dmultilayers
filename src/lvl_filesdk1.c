@@ -586,6 +586,9 @@ TbBool level_lof_file_parse(const char *fname, char *buf, long len)
         case 14: // MAP_FORMAT_VERSION
             // As for now, ignore these
             break;
+        case 17: // LAYER
+            parse_level_layer_line(lvinfo, buf, &pos, len, fname);
+            break;
         case 13: // MAPSIZE
             if (get_conf_parameter_single(buf,&pos,len,word_buf,sizeof(word_buf)) > 0)
             {

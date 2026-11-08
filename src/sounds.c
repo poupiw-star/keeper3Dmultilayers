@@ -55,6 +55,7 @@
 
 #include "keeperfx.hpp"
 #include "game_heap.h"
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -72,6 +73,25 @@ int atmos_sound_frequency = 800;
 static char ambience_timer;
 int sdl_flags = 0;
 /******************************************************************************/
+/** Distance from the sound receiver to a position; on a map with dungeon layers, a position on another
+ * layer counts as being at the same spot on the receiver's layer, a storey or more away. */
+static long receiver_sound_distance(const struct Coord3d *pos)
+{
+    long ex = pos->x.val;
+    long ey = pos->y.val;
+    long ez = pos->z.val;
+    layer_sound_position_map((long)Receiver.pos.val_x, (long)Receiver.pos.val_y, (long)Receiver.pos.val_z, &ex, &ey, &ez);
+    struct Coord3d rcpos;
+    rcpos.x.val = Receiver.pos.val_x;
+    rcpos.y.val = Receiver.pos.val_y;
+    rcpos.z.val = Receiver.pos.val_z;
+    struct Coord3d mapped;
+    mapped.x.val = ex;
+    mapped.y.val = ey;
+    mapped.z.val = ez;
+    return get_chessboard_3d_distance(&rcpos, &mapped);
+}
+
 void thing_play_sample(struct Thing *thing, SoundSmplTblID smptbl_idx, SoundPitch pitch, char repeats, unsigned char ctype, unsigned char flags, long priority, SoundVolume loudness)
 {
     if (SoundDisabled)
@@ -95,11 +115,7 @@ void thing_play_sample(struct Thing *thing, SoundSmplTblID smptbl_idx, SoundPitc
         sample_id = get_custom_offset() + (-smptbl_idx) - 1;
     }
 
-    struct Coord3d rcpos;
-    rcpos.x.val = Receiver.pos.val_x;
-    rcpos.y.val = Receiver.pos.val_y;
-    rcpos.z.val = Receiver.pos.val_z;
-    if (get_chessboard_3d_distance(&rcpos, &thing->mappos) < MaxSoundDistance)
+    if (receiver_sound_distance(&thing->mappos) < MaxSoundDistance)
     {
         long eidx = thing->snd_emitter_id;
         if (eidx > 0)
@@ -128,11 +144,7 @@ void play_sound_if_close_to_receiver(struct Coord3d *soundpos, SoundSmplTblID sm
         return;
     if (GetCurrentSoundMasterVolume() <= 0)
         return;
-    struct Coord3d rcpos;
-    rcpos.x.val = Receiver.pos.val_x;
-    rcpos.y.val = Receiver.pos.val_y;
-    rcpos.z.val = Receiver.pos.val_z;
-    if (get_chessboard_3d_distance(&rcpos, soundpos) < MaxSoundDistance)
+    if (receiver_sound_distance(soundpos) < MaxSoundDistance)
     {
         play_non_3d_sample(smptbl_idx);
     }
@@ -446,6 +458,7 @@ TbBool init_sound(void)
     S3DInit();
     S3DSetNumberOfSounds(snd_settng->max_number_of_samples);
     S3DSetMaximumSoundDistance(5120);
+    S3DSetPositionMapFunction(layer_sound_position_map);
     return true;
 }
 

@@ -71,6 +71,7 @@
   #include "ftests/ftest.h"
 #endif
 
+#include "map_connectors.h"
 #include "post_inc.h"
 
 extern TbBool force_player_num;
@@ -304,6 +305,8 @@ static void post_init_level(void)
     clear_creature_pool();
     setup_computer_players2();
     load_script(get_loaded_level_number());
+    // Dungeon layers: the Stairs room is always there to build, whatever the level script says.
+    layer_make_stairs_room_available();
     lua_on_game_start();
     init_dungeons_research();
     init_dungeons_essential_position();

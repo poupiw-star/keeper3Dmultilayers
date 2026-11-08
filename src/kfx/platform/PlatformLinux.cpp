@@ -30,7 +30,11 @@ static std::string directory_from_filespec(const char* filespec)
     return ".";
 }
 
+#if defined(__APPLE__)
+const char* PlatformLinux::GetOSVersion() const { return "macOS"; } // same POSIX layer serves macOS
+#else
 const char* PlatformLinux::GetOSVersion() const { return "Linux"; }
+#endif
 const void* PlatformLinux::GetImageBase() const { return nullptr; }
 const char* PlatformLinux::GetWineVersion() const { return nullptr; } // running native
 const char* PlatformLinux::GetWineHost() const { return nullptr; }    // running native

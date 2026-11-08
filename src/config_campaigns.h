@@ -25,6 +25,7 @@
 #include "config.h"
 #include "config_strings.h"
 #include "config_mods.h"
+#include "map_layers.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -169,8 +170,10 @@ struct LevelInformation {
   unsigned short state;
   unsigned short location;
   int mapsize_x;
-  int mapsize_y;  
-  char intro_desc_id[LINEMSG_SIZE];  
+  int mapsize_y;
+  int layers_count;
+  struct MapLayer layers[MAX_MAP_LAYERS];
+  char intro_desc_id[LINEMSG_SIZE];
   struct LevelDescriptionGeo *level_description_geo;
 };
 

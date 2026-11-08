@@ -27,6 +27,7 @@
 #include "front_simple.h"
 #include "config.h"
 #include "game_legacy.h"
+#include "map_layer_dig.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -113,6 +114,8 @@ short update_animating_texture_maps(void)
       }
       dst += TEXTURE_BLOCKS_COUNT;
   }
+  // Dungeon layers: the blue tag pattern follows the usual one's frames.
+  layer_dig_update_tag_textures();
   anim_counter = frame;
   return true;
 }

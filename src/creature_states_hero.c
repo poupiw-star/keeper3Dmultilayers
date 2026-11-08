@@ -48,6 +48,7 @@
 #include "gui_topmsg.h"
 #include "game_legacy.h"
 #include "map_locations.h"
+#include "map_connectors.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1525,6 +1526,19 @@ short tunnelling(struct Thing *creatng)
     {
         internal_set_thing_state(creatng, CrSt_GoodDoingNothing);
         return 1;
+    }
+    // Dungeon layers: tunnellers only dig on the layer they are going to, so they first walk over a connector.
+    if (creature_target_on_other_layer(creatng, pos))
+    {
+        struct Coord3d entry;
+        if (layer_route_entry_towards(creatng, pos, &entry)
+            && (creature_move_to(creatng, &entry, speed, 0, 0) != -1))
+        {
+            // The tunnel is worked out again from where it arrives.
+            if ((cctrl->navi.pos_final.x.val == pos->x.val) && (cctrl->navi.pos_final.y.val == pos->y.val))
+                cctrl->navi.pos_final.x.val = 0;
+            return 0;
+        }
     }
     long move_result = creature_tunnel_to(creatng, pos, speed);
     if (move_result == 1)

@@ -51,6 +51,7 @@
 #include "thing_shots.h"
 #include "thing_stats.h"
 #include <math.h>
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -95,6 +96,23 @@ static TbBool any_player_close_enough_to_see(const struct Coord3d *pos)
             if (chessboard_distance(x, y, (MapCoord)pos->x.val, (MapCoord)pos->y.val) <= radius)
             {
                 return true;
+            }
+            // On a map with dungeon layers, other layers can be seen through pits:
+            // compare the effect's position as if it were on the viewer's layer.
+            if (map_has_layers())
+            {
+                const int view_layer = get_layer_at_coord(x, y);
+                const int pos_layer = get_layer_at_coord(pos->x.val, pos->y.val);
+                if ((view_layer >= 0) && (pos_layer >= 0) && (view_layer != pos_layer))
+                {
+                    MapCoord pos_x = pos->x.val;
+                    MapCoord pos_y = pos->y.val;
+                    if (translate_coord_to_layer(pos_layer, view_layer, &pos_x, &pos_y)
+                        && (chessboard_distance(x, y, pos_x, pos_y) <= radius))
+                    {
+                        return true;
+                    }
+                }
             }
         }
     }

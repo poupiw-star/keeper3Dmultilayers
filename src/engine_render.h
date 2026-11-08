@@ -106,6 +106,7 @@ extern struct stripey_line colored_stripey_lines[];
 extern unsigned char poly_pool[POLY_POOL_SIZE];
 extern unsigned char *poly_pool_end;
 extern long cells_away;
+extern long layer_depth_bias;
 extern float hud_scale;
 extern int creature_status_size;
 extern int line_box_size;

@@ -109,6 +109,8 @@ enum RoomRoleFlags {
     RoRoF_PassWater      = 0x00800000, /**< The room is a bridge for use over water. */
     RoRoF_PassLava       = 0x01000000, /**< The room is a bridge for use over lava. */
     RoRoF_PassAbyss      = 0x02000000,
+    RoRoF_LayerStairs    = 0x04000000, /**< Dungeon layers: stairs to the same tile on the layer above or below. */
+    RoRoF_LayerElevator  = 0x08000000, /**< Dungeon layers: an elevator to the same tile on the layer above or below. */
 };
 
 struct SlabMap;

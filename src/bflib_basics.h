@@ -36,7 +36,7 @@ extern "C" {
 // Maximum disk path size OS can handle
 #if defined(_WIN32)
 #define OS_ABSPATH_SIZE  260 /* ANSI */
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 #define OS_ABSPATH_SIZE  4096
 #else
 // arbitrary fallback

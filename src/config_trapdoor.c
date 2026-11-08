@@ -65,6 +65,7 @@ static const struct NamedCommand door_properties_commands[] = {
     {"SECRET",               DoMF_Secret},
     {"THICK",                DoMF_Thick},
     {"MIDAS",                DoMF_Midas},
+    {"LADDER",               DoMF_Ladder},
     {NULL,                   0},
   };
 

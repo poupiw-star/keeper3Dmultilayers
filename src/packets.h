@@ -204,6 +204,7 @@ enum TbPacketAction {
         PckA_CheatApplySpell,
         PckA_CheatKillCreature,
         PckA_SetTimestamp,
+        PckA_LayerVerticalDig, /**< Dungeon layers: tag through floors; par1/par2 slab, par3 bit 0 up and the rest the area width, par4 LVDigM_* mode. */
 };
 
 /** Packet flags for non-action player operation. **/

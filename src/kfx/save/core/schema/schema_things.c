@@ -210,6 +210,7 @@ SAVE_STRUCT(CreatureControl, struct CreatureControl,
     SAVE_FIELD_EX(struct CreatureControl, active_timebomb_spell, SV_U16, .flags = 0, .name_domain = SND_Spell),
     SAVE_FIELD(struct CreatureControl, vertical_speed, SV_I16),
     SAVE_FIELD(struct CreatureControl, hand_blocked_turns, SV_I32),
+    SAVE_FIELD(struct CreatureControl, layer_climb, SV_U8),
 );
 
 SAVE_STRUCT(MemberPos, struct MemberPos,

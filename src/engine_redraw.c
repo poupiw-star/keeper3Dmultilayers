@@ -70,6 +70,7 @@
 #include "packets.h"
 #include "custom_sprites.h"
 #include "keeperfx.hpp"
+#include "roomspace_input.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus

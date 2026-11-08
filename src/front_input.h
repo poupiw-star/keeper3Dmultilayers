@@ -97,6 +97,8 @@ enum GameKeys {
     Gkey_LVShowAllEnsigns,
     Gkey_LVNextLevel,
     Gkey_LVPrevLevel,
+    Gkey_LayerUp,
+    Gkey_LayerDown,
     Gkey_NextInstance,
     Gkey_PrevInstance,
     Gkey_ButtonSnapLeft,

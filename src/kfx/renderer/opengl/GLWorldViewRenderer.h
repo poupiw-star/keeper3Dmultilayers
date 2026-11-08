@@ -195,6 +195,7 @@ private:
     bool compile_world_shaders();
     void push_shade_uniforms();
 
+    float bucket_ndc(float bucket) const;
     bool append_triangle(int tile_id,
                          const struct PolyPoint* p0,
                          const struct PolyPoint* p1,
@@ -314,6 +315,7 @@ private:
     int m_vp_x         = 0;   // GT: viewport left edge in screen pixels
     int m_vp_y         = 0;   // GT: viewport top edge in screen pixels
     int m_current_bucket = 0; // GT: bucket index being processed
+    int m_layer_pass = -1; // GT: index in layer_pass_order of the dungeon layer list being drawn; -1 for the main list
     int m_draw_screen_w = 0;  // RT: active viewport width for GL draw calls
     int m_draw_screen_h = 0;  // RT: active viewport height for GL draw calls
 

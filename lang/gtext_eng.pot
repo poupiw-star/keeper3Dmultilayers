@@ -1551,7 +1551,7 @@ msgstr ""
 #: guitext:254
 msgctxt "Creature spell"
 msgid "Dig: This is the basic ability of the Imp, and allows it to tunnel through earth."
-msgstr ""
+msgstr "Dig: This is the basic ability of the Imp, and allows it to tunnel through earth. It also claims the floor you stand on and wears down enemy floor and rooms. Hold Shift to reinforce the wall you face instead."
 
 #: guitext:255
 msgctxt "Creature spell"
@@ -6172,3 +6172,23 @@ msgstr "Connection unstable: %d.%d"
 msgctxt "Network game message"
 msgid "Files differ between %s and host"
 msgstr "Files differ between %s and host"
+
+#: guitext:1171
+msgctxt "Creature spell"
+msgid "Claim: Claims the floor you stand on. On enemy floor or in an enemy room, wears it down and steals it."
+msgstr "Claim: Claims the floor you stand on. On enemy floor or in an enemy room, wears it down and steals it."
+
+#: guitext:1172
+msgctxt "Creature spell"
+msgid "Reinforce: Reinforces the earth wall you face, so enemies cannot dig through it."
+msgstr "Reinforce: Reinforces the earth wall you face, so enemies cannot dig through it."
+
+#: guitext:1173
+msgctxt "Creature spell"
+msgid "Dig Down: Digs a hole through the floor ahead of you, or under you."
+msgstr "Dig Down: Digs a hole through the floor ahead of you, or under you."
+
+#: guitext:1174
+msgctxt "Creature spell"
+msgid "Dig Up: Digs a hole through the ceiling above you, or above the tile ahead."
+msgstr "Dig Up: Digs a hole through the ceiling above you, or above the tile ahead."

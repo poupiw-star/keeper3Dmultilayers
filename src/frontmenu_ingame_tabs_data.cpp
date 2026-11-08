@@ -128,12 +128,16 @@ void gui_set_query(struct GuiButton *gbtn);
 void maintain_query_button(struct GuiButton *gbtn);
 void maintain_player_page2(struct GuiButton *gbtn);
 void gui_set_page(struct GuiButton* gbtn);
+void gui_switch_layer(struct GuiButton *gbtn);
+void maintain_layer_button(struct GuiButton *gbtn);
 /******************************************************************************/
 struct GuiButtonInit main_menu_buttons[] = {
   {LbBtnT_NormalBtn,    BID_OPTIONS, 0, 0,                 NULL,           NULL,  NULL,               0,  68,   0,  68,   0, 68, 16, gui_area_new_normal_button, GPS_rpanel_rpanel_btn_quit_act, GUIStr_MnuOptionsDesc,&options_menu, {0},        0, NULL },
   {LbBtnT_NormalBtn,BID_MAP_ZOOM_IN, 0, 0,          gui_zoom_in,           NULL,  NULL,               0, 112,   4, 114,   4, 26, 66, gui_area_new_vertical_button, GPS_rpanel_rpanel_mapbt2a, GUIStr_PaneZoomInDesc,      0,       {0},            0, NULL },
   {LbBtnT_NormalBtn,BID_MAP_ZOOM_OU, 0, 0,         gui_zoom_out,           NULL,  NULL,               0, 110,  70, 114,  70, 26, 66, gui_area_new_vertical_button, GPS_rpanel_rpanel_mapbt3a, GUIStr_PaneZoomOutDesc,     0,       {0},            0, NULL },
   {LbBtnT_NormalBtn,BID_MAP_ZOOM_FS, 0, 0,        gui_go_to_map,           NULL,  NULL,               0,   0,   0,   0,   0, 30, 31, gui_area_new_vertical_button, GPS_rpanel_rpanel_btn_bigmap_act, GUIStr_PaneLargeMapDesc,    0,       {0},            0, NULL },
+  {LbBtnT_NormalBtn,    BID_DEFAULT, 0, 0,     gui_switch_layer,           NULL,  NULL,               0, 105, 136, 105, 136, 17, 18, gui_area_new_normal_button, GPS_rpanel_rpanel_btn_up_act, GUIStr_Empty,             0,      {1},            0, maintain_layer_button },
+  {LbBtnT_NormalBtn,    BID_DEFAULT, 0, 0,     gui_switch_layer,           NULL,  NULL,               0, 122, 136, 122, 136, 17, 18, gui_area_new_normal_button, GPS_rpanel_rpanel_btn_down_act, GUIStr_Empty,           0,     {-1},            0, maintain_layer_button },
   {LbBtnT_NormalBtn,     BID_ASSIST, 0, 0,gui_turn_on_autopilot,           NULL,  NULL,               0,   0,  70,   0,  70, 16, 67, gui_area_autopilot_button, GPS_rpanel_rpanel_btn_cassisti_act, GUIStr_Empty,               0,       {0},            0, maintain_turn_on_autopilot },
   { LbBtnT_RadioBtn,   BID_INFO_TAB, 0, 0,    gui_set_menu_mode,           NULL,  NULL,      GMnu_QUERY,   0, 154,   0, 154, 28, 34, gui_draw_tab, GPS_rpanel_rpanel_tab_infoa, GUIStr_InformationPanelDesc,0,{.ptr = &info_tag},     0, menu_tab_maintain },
   { LbBtnT_RadioBtn,   BID_ROOM_TAB, 0, 0,    gui_set_menu_mode,           NULL,  NULL,       GMnu_ROOM,  28, 154,  28, 154, 28, 34, gui_draw_tab, GPS_rpanel_rpanel_tab_rooma, GUIStr_RoomPanelDesc,       0,{.ptr = &room_tag},     0, menu_tab_maintain },
@@ -153,7 +157,7 @@ struct GuiButtonInit main_menu_buttons[] = {
   {LbBtnT_NormalBtn,   BID_MSG_EV11, 0, 0,       gui_open_event, gui_kill_event,  NULL,               0, 138,  60, 138,  60, 24, 30, gui_area_event_button,             0, GUIStr_Empty,               0,      {10},            0, maintain_event_button },
   {LbBtnT_NormalBtn,   BID_MSG_EV12, 0, 0,       gui_open_event, gui_kill_event,  NULL,               0, 138,  30, 138,  30, 24, 30, gui_area_event_button,             0, GUIStr_Empty,               0,      {11},            0, maintain_event_button },
   {LbBtnT_NormalBtn,   BID_MSG_EV13, 0, 0,       gui_open_event, gui_kill_event,  NULL,               0, 138,   0, 138,   0, 24, 30, gui_area_event_button,             0, GUIStr_Empty,               0,      {12},            0, maintain_event_button },
-  {LbBtnT_NormalBtn,    BID_DEFAULT, 0, 0,                 NULL,           NULL,  NULL,               0,  22, 122,  22, 122, 94, 40, NULL,                              0, GUIStr_TeamMoneyAvailable,  0,       {0},            0, NULL },
+  {LbBtnT_NormalBtn,    BID_DEFAULT, 0, 0,                 NULL,           NULL,  NULL,               0,  22, 122,  22, 122, 83, 40, NULL,                              0, GUIStr_TeamMoneyAvailable,  0,       {0},            0, NULL },
   {              -1,    BID_DEFAULT, 0, 0,                 NULL,           NULL,  NULL,               0,   0,   0,   0,   0,  0,  0, NULL,                              0,   0,                        0,       {0},            0, NULL },
 };
 

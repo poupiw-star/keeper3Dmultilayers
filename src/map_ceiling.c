@@ -24,6 +24,8 @@
 #include "front_simple.h"
 #include "globals.h"
 #include "game_legacy.h"
+#include "map_layers.h"
+#include "map_connectors.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -104,6 +106,17 @@ static int ceiling_block_is_solid_including_corners_return_height(SubtlCodedCoor
     if ((col->bitfields & CLF_CEILING_MASK) != 0)
         return find_column_height_including_lintels(col);
     return col->bitfields >> 4;
+}
+
+/** Dungeon layers: the cave ceiling stays under the floor of the layer above, which starts a storey up;
+ * over and next to stairs it is flush with that floor, as the steps go all the way up there. */
+static int layer_capped_ceiling(MapSubtlCoord stl_x, MapSubtlCoord stl_y, int height)
+{
+    if (!map_has_layers())
+        return height;
+    if (subtile_next_to_layer_stairs(stl_x, stl_y))
+        return LAYER_STOREY_CUBES;
+    return min(height, LAYER_STOREY_CUBES - 1);
 }
 
 static int ceiling_calculate_height_from_nearest_walls(int result, int number_of_steps)
@@ -234,7 +247,7 @@ void ceiling_partially_recompute_heights(MapSubtlCoord sx, MapSubtlCoord sy, Map
             }
 
             struct Map* mapblk = get_map_block_at_pos(stl_num2);
-            mapblk->filled_subtiles = ceiling_height;
+            mapblk->filled_subtiles = layer_capped_ceiling(current_stl_x, current_stl_y, ceiling_height);
             current_stl_x++;
         }
         current_stl_y ++;
@@ -343,7 +356,7 @@ void ceiling_init()
               }
             }
             struct Map *mapblk = get_map_block_at(stl_x,stl_y);
-            set_mapblk_filled_subtiles(mapblk, filled_h);
+            set_mapblk_filled_subtiles(mapblk, layer_capped_ceiling(stl_x, stl_y, filled_h));
         }
     }
 }

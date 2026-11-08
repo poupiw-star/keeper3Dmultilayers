@@ -68,6 +68,9 @@ enum CreatureModelFlags {
     CMF_CannotPickUp      = 0x400000, // Creature cannot be picked up by the hand.
     CMF_DropOnPath        = 0x800000, // Creature can be dropped on unclaimed path
     CMF_CannotPossess     = 0x1000000, // Creature cannot be possessed.
+    CMF_LayerNoStairs     = 0x2000000, // Dungeon layers: creature does not use stairs.
+    CMF_LayerLadders      = 0x4000000, // Dungeon layers: creature can climb ladders.
+    CMF_LayerNoElevator   = 0x8000000, // Dungeon layers: creature is too big for elevators.
 };
 
 // Before C23 standard, we cannot specify the underlaying type (in this case we want 64bit int) of enum.

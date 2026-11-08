@@ -167,6 +167,7 @@ struct RoomRulesConfig {
     unsigned short work_efficiency;
     unsigned short scavenge_efficiency;
     unsigned short research_efficiency;
+    unsigned short first_person_train_multiplier; /**< First-person training at a post is this many times faster. */
 };
 struct WorkersRulesConfig {
     unsigned char hits_per_slab;

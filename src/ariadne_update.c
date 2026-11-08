@@ -28,6 +28,8 @@
 #include "kfx/profiling/KfxProfilingC.h"
 
 
+#include "map_connectors.h"
+#include "map_layers.h"
 #include "post_inc.h"
 
 
@@ -1633,6 +1635,9 @@ static NavColour get_navigation_colour_for_door(long stl_x, long stl_y)
 static NavColour get_navigation_colour_for_cube(long stl_x, long stl_y)
 {
     NavColour i;
+    // Dungeon layers: a dug floor over a wall below is a hole nobody can walk into.
+    if (subtile_is_layer_pit(stl_x, stl_y) && !subtile_is_layer_fall_pit(stl_x, stl_y))
+        return (NAVMAP_FLOORHEIGHT_MAX << NAVMAP_FLOORHEIGHT_BIT);
     i = get_floor_filled_subtiles_at(stl_x, stl_y);
     if (i > NAVMAP_FLOORHEIGHT_MAX)
       i = NAVMAP_FLOORHEIGHT_MAX;
@@ -1640,6 +1645,8 @@ static NavColour get_navigation_colour_for_cube(long stl_x, long stl_y)
       i |= NAVMAP_UNSAFE_SURFACE;
     if (subtile_has_abyss_on_top(stl_x, stl_y))
       i |= NAVMAP_ABYSS;
+    if (subtile_is_layer_stairs_top_row(stl_x, stl_y) || subtile_is_beyond_layer_stairs(stl_x, stl_y))
+      i |= NAVMAP_STAIRS_END;
     return i;
 }
 
@@ -1721,6 +1728,8 @@ size_t transfer_navigation_state(void *buffer, enum NavigationStateOperation ope
 
 int32_t init_navigation(void)
 {
+    // Dungeon layers: the connector list is worked out again for the new map state.
+    layer_connectors_init();
     init_navigation_map();
     rebuild_navigation();
     return 1;

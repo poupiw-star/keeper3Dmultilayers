@@ -109,6 +109,7 @@
 #include "lua_triggers.h"
 
 #include "keeperfx.hpp"
+#include "map_layer_dig.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -423,6 +424,7 @@ TbBool packet_action_has_camera_position(enum TbPacketAction action)
     case PckA_ApplyRoomspaceDigTag:
     case PckA_SetTimestamp:
     case PckA_ZoomFromMap:
+    case PckA_LayerVerticalDig:
         return false;
     default:
         return true;
@@ -1104,6 +1106,11 @@ TbBool process_user_global_packet_action(NetUserId user)
   case PckA_LoadViewType:
       set_user_view_type(user, pckt->actn_par1);
       return false;
+    case PckA_LayerVerticalDig:
+        // par3: bit 0 up, the rest the width of the square area; par4: a LVDigM_* mode.
+        layer_set_vertical_dig_area(plyr_idx, pckt->actn_par1, pckt->actn_par2, (pckt->actn_par3 & 1) != 0,
+            max(1, pckt->actn_par3 >> 1), pckt->actn_par4);
+        return false;
     case PckA_RoomspaceHighlightToggle:
     {
         get_user_state(user)->prefs[UPref_StartingHighlightMode] = pckt->actn_par1;

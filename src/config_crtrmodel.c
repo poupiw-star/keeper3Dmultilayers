@@ -138,6 +138,9 @@ const struct NamedCommand creatmodel_properties_commands[] = {
   {"CANNOT_PICK_UP",    37},
   {"DROP_ON_PATH",      38},
   {"CANNOT_POSSESS",    39},
+  {"NO_STAIRS",         40},
+  {"CLIMBS_LADDERS",    41},
+  {"TOO_BIG_FOR_ELEVATOR", 42},
   {NULL,                 0},
   };
 
@@ -775,6 +778,18 @@ TbBool parse_creaturemodel_attributes_blocks(long crtr_model,char *buf,long len,
                 break;
             case 39: // CANNOT_POSSESS
                 crconf->model_flags |= CMF_CannotPossess;
+                n++;
+                break;
+            case 40: // NO_STAIRS
+                crconf->model_flags |= CMF_LayerNoStairs;
+                n++;
+                break;
+            case 41: // CLIMBS_LADDERS
+                crconf->model_flags |= CMF_LayerLadders;
+                n++;
+                break;
+            case 42: // TOO_BIG_FOR_ELEVATOR
+                crconf->model_flags |= CMF_LayerNoElevator;
                 n++;
                 break;
             default:

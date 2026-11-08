@@ -47,6 +47,7 @@
 #include "cursor_tag.h"
 #include "player_instances.h"
 #include "room_workshop.h"
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1252,7 +1253,7 @@ TbBool can_place_trap_on(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSubtlCoo
     if (((slabst->block_flags & (SlbAtFlg_Filled|SlbAtFlg_Digable|SlbAtFlg_Valuable)) != 0)) {
         return false;
     }
-    if (slab_kind_is_liquid(slb->kind)) {
+    if (slab_kind_is_liquid(slb->kind) || slab_is_layer_pit(slb_x, slb_y)) {
         return false;
     }
     if ((slabmap_owner(slb) == plyr_idx) && (((slb->kind == SlbT_BRIDGE) && (trap_on_bridge(trpkind))) || (slb->kind == SlbT_CLAIMED) || (slab_is_door(slb_x, slb_y))))

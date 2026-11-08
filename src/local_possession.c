@@ -35,6 +35,7 @@
 #include "thing_creature.h"
 #include "thing_data.h"
 #include "thing_physics.h"
+#include "map_connectors.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -174,6 +175,10 @@ static TbBool step_possession_prediction(struct PossessionPrediction *pred, cons
     struct Thing *thing = &pred->thing;
     struct CreatureControl *cctrl = &pred->cctrl;
     if (flag_is_set(thing->state_flags, TF1_FallingIntoAbyss) || flag_is_set(thing->movement_flags, TMvF_Immobile)) {
+        return false;
+    }
+    // Climbing between layers is not predicted; the view follows the real creature.
+    if ((cctrl->layer_climb == LClS_Up) || (cctrl->layer_climb == LClS_Down)) {
         return false;
     }
     if (pckt != NULL) {

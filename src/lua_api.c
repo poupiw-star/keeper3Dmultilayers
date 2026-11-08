@@ -28,6 +28,12 @@
 #include "thing_effects.h"
 #include "thing_shots.h"
 #include "magic_powers.h"
+#include "map_layers.h"
+#include "map_layer_dig.h"
+#include "map_blocks.h"
+#include "thing_navigate.h"
+#include "thing_physics.h"
+#include "creature_control.h"
 
 #include "lua_base.h"
 #include "lua_params.h"
@@ -2603,6 +2609,82 @@ static int lua_get_slab(lua_State *L)
     return 1;
 }
 
+/**********************************************/
+// Dungeon layers. Layer numbers start at 0 (Ground).
+/**********************************************/
+
+// GetLayerCount() -> number of layers; 1 when the map has no layers
+static int lua_get_layer_count(lua_State *L)
+{
+    lua_pushinteger(L, get_map_layers_count());
+    return 1;
+}
+
+// GetLayerAt(stl_x, stl_y) -> layer number, or nil for rock between layers
+static int lua_get_layer_at(lua_State *L)
+{
+    MapSubtlCoord stl_x = luaL_checkstl_x(L, 1);
+    MapSubtlCoord stl_y = luaL_checkstl_y(L, 2);
+    int layer = get_layer_at_subtile(stl_x, stl_y);
+    if (layer < 0)
+        lua_pushnil(L);
+    else
+        lua_pushinteger(L, layer);
+    return 1;
+}
+
+// GetLayerName(layer) -> name of the layer
+static int lua_dig_layer_floor(lua_State *L)
+{
+    MapSlabCoord slb_x = luaL_checkslb_x(L, 1);
+    MapSlabCoord slb_y = luaL_checkslb_y(L, 2);
+    lua_pushboolean(L, layer_dig_out_floor_now(slb_x, slb_y));
+    return 1;
+}
+
+static int lua_get_layer_name(lua_State *L)
+{
+    int layer = luaL_checkinteger(L, 1);
+    if ((layer < 0) || (layer >= get_map_layers_count()))
+        return luaL_argerror(L, 1, "no such layer");
+    lua_pushstring(L, get_layer_name(layer));
+    return 1;
+}
+
+// MoveThingToLayer(thing, layer) -> true if moved; keeps the same spot on the floor
+static int lua_move_thing_to_layer(lua_State *L)
+{
+    struct Thing *thing = luaL_checkThing(L, 1);
+    int to_layer = luaL_checkinteger(L, 2);
+    if ((to_layer < 0) || (to_layer >= get_map_layers_count()))
+        return luaL_argerror(L, 2, "no such layer");
+    int from_layer = get_layer_at_coord(thing->mappos.x.val, thing->mappos.y.val);
+    struct Coord3d pos = thing->mappos;
+    if ((from_layer < 0) || !translate_coord_to_layer(from_layer, to_layer, &pos.x.val, &pos.y.val))
+    {
+        lua_pushboolean(L, from_layer == to_layer);
+        return 1;
+    }
+    pos.z.val = get_thing_height_at(thing, &pos);
+    move_thing_in_map(thing, &pos);
+    reset_interpolation_of_thing(thing);
+    if (thing->class_id == TCls_Creature)
+    {
+        if (flag_is_set(thing->state_flags, TF1_FallingIntoAbyss))
+        {
+            clear_flag(thing->state_flags, TF1_FallingIntoAbyss);
+            clear_thing_acceleration(thing);
+            clear_thing_velocity(thing);
+        }
+        set_start_state(thing);
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        cctrl->turns_at_job = -1;
+        check_map_explored(thing, thing->mappos.x.stl.num, thing->mappos.y.stl.num);
+    }
+    lua_pushboolean(L, true);
+    return 1;
+}
+
 static int lua_run_dkscript_command(lua_State *L)
 {
     const char* map_command_const = lua_tostring(L, 1);
@@ -2840,6 +2922,11 @@ static const luaL_Reg global_methods[] = {
     {"GetSlab",                         lua_get_slab},
     {"GetString",                       lua_get_string},
     {"GetFloorHeight",                  lua_get_floor_height},
+    {"GetLayerCount",                   lua_get_layer_count},
+    {"GetLayerAt",                      lua_get_layer_at},
+    {"GetLayerName",                    lua_get_layer_name},
+    {"DigLayerFloor",                   lua_dig_layer_floor},
+    {"MoveThingToLayer",                lua_move_thing_to_layer},
     {"GetRoomsOfPlayerAndType",         lua_get_rooms_of_player_and_kind},
 
 //usecase specific functions

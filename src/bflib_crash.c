@@ -40,7 +40,13 @@
 #endif
 #if defined(BF_POSIX_CRASH)
 #include <execinfo.h>
+#if defined(__APPLE__)
+// macOS's <ucontext.h> refuses to compile without _XOPEN_SOURCE; the type
+// alone (all the signal handler needs) comes from <sys/ucontext.h>.
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #include <dlfcn.h>
 #endif
@@ -438,6 +444,16 @@ static void log_posix_context(void *context)
     LbErrorLog("Context PC=%p SP=%p.\n",
         (void *)uctx->uc_mcontext.pc,
         (void *)uctx->uc_mcontext.sp);
+#elif defined(__APPLE__) && defined(__aarch64__)
+    ucontext_t *uctx = (ucontext_t *)context;
+    LbErrorLog("Context PC=%p SP=%p.\n",
+        (void *)__darwin_arm_thread_state64_get_pc(uctx->uc_mcontext->__ss),
+        (void *)__darwin_arm_thread_state64_get_sp(uctx->uc_mcontext->__ss));
+#elif defined(__APPLE__) && defined(__x86_64__)
+    ucontext_t *uctx = (ucontext_t *)context;
+    LbErrorLog("Context RIP=%p RSP=%p.\n",
+        (void *)uctx->uc_mcontext->__ss.__rip,
+        (void *)uctx->uc_mcontext->__ss.__rsp);
 #else
     (void)context;
 #endif

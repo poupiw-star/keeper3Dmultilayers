@@ -116,3 +116,20 @@ _SWE = """En Beholder har anslutit sig till dig. Dessa stora, klotformade varels
 De känner ett intensivt hat mot allt de kan se, särskilt mot dem som hånar deras avsaknad av öron."""
 _UKR = """Спостерігач приєднався до вас. Ці великі кулясті істоти мають кілька очних відростків і одне центральне око, кожне з яких містить потужну магію.  
 Вони відчувають сильну ненавист до всього, що можуть бачити, особливо до тих, хто насміхається з їх відсутності вух."""
+
+# Dungeon layers: the Stairs room
+[STAIRS_ROOM_NAME]
+# name of a room, in the rooms panel
+ENG = "Stairs"
+FRE = "Escalier"
+_GER = "Treppe"
+_ITA = "Scala"
+_SPA = "Escalera"
+_DUT = "Trap"
+_POL = "Schody"
+_RUS = "Лестница"
+
+[STAIRS_ROOM_TOOLTIP]
+# tooltip of the Stairs room button
+ENG = "Stairs: Two tiles in a row lead your creatures up to the layer above. A single tile is only half stairs. LMB select. RMB zoom."
+FRE = "Escalier : deux cases alignées mènent vos créatures à l'étage du dessus. Une seule case ne fait qu'un demi-escalier. Clic gauche : choisir. Clic droit : zoomer."

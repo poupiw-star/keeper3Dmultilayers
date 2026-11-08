@@ -64,6 +64,7 @@
 #include <cstdint>
 
 #include "kfx/profiling/KfxProfiling.h"
+#include "map_connectors.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -500,6 +501,7 @@ void update(void)
         }
         clear_active_dungeons_stats();
         update_creature_pool_state();
+        layer_connectors_process_turn();
         update_things();
         process_rooms();
         process_dungeons();

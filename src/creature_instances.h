@@ -148,6 +148,36 @@ struct InstanceInfo *creature_instance_info_get_f(CrInstance inst_idx,const char
 void process_creature_instance(struct Thing *thing);
 void delay_instances_on_drop(struct Thing *thing);
 TbBool process_creature_self_spell_casting(struct Thing* thing);
+
+/** What a first-person dig would hit, for the cursor box. */
+enum FirstPersonDigTargetKind {
+    FPDig_None = 0,
+    FPDig_Wall,    /**< The dig shot hits a wall slab. */
+};
+int first_person_dig_target(const struct Thing *creatng, MapSlabCoord *out_slb_x, MapSlabCoord *out_slb_y, int *colour);
+
+/** Which job a possessed imp's tool instance does: the first parameter of its config Function line. */
+enum FirstPersonToolMode {
+    FPToolM_None = 0,
+    FPToolM_Claim,     /**< Claims path; converts enemy floor and steals rooms. */
+    FPToolM_Reinforce, /**< Reinforces the earth wall it faces. */
+    FPToolM_DigDown,   /**< Dungeon layers: digs through the floor. */
+    FPToolM_DigUp,     /**< Dungeon layers: digs through the ceiling. */
+};
+/** What a possessed imp's tool (instf_first_person_imp_tool) would work on, for the instance and the cursor box. */
+enum FirstPersonToolTargetKind {
+    FPTool_None = 0,
+    FPTool_Convert,     /**< Wears down the enemy floor or room the imp stands on (steals the room at the end). */
+    FPTool_Claim,       /**< Claims the unclaimed path the imp stands on. */
+    FPTool_Reinforce,   /**< Reinforces the earth wall it faces. */
+    FPTool_Blocked,     /**< Faces a wall it cannot reinforce (cursor only). */
+    FPTool_DigVertical, /**< Digs through a floor or ceiling. */
+};
+int first_person_tool_target(const struct Thing *creatng, int mode, MapSlabCoord *out_slb_x, MapSlabCoord *out_slb_y, MapSubtlCoord *out_stl_x, MapSubtlCoord *out_stl_y, int *colour);
+/** The FPToolM_* mode of an imp tool instance, or FPToolM_None for any other instance. */
+int first_person_tool_mode(CrInstance inst_idx);
+/** True for the instances a possessed imp does its jobs with (dig and the tools). */
+TbBool creature_instance_is_first_person_imp_work(CrInstance inst_idx);
 CrInstance process_creature_ranged_buff_spell_casting(struct Thing* thing);
 
 TbBool creature_instance_info_invalid(const struct InstanceInfo *inst_inf);

@@ -66,6 +66,7 @@ SAVE_DECLARE(CreatureStorage);
 SAVE_DECLARE(CubeConfigStats);
 SAVE_DECLARE(CubesConfig);
 SAVE_DECLARE(DesyncChecksums);
+SAVE_DECLARE(MapLayer);
 SAVE_DECLARE(DiggerStack);
 SAVE_DECLARE(DoorConfigStats);
 SAVE_DECLARE(Dungeon);

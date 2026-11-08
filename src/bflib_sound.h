@@ -62,6 +62,9 @@ enum SoundSampleFlags {
 
 typedef void *SndData;
 typedef long (*S3D_LineOfSight_Func)(long, long, long, long, long, long);
+/** Moves an emitter position into the receiver's frame (used for dungeon layers, which sit apart on the map).
+ * Returns nonzero if the emitter was on another layer; such sounds skip the line-of-sight muffling. */
+typedef long (*S3D_PositionMap_Func)(long recv_x, long recv_y, long recv_z, long *emit_x, long *emit_y, long *emit_z);
 
 struct SoundCoord3d {
     unsigned long val_x;
@@ -135,6 +138,7 @@ TbBool S3DDeleteSampleFromEmitter(SoundEmitterID, SoundSmplTblID);
 TbBool S3DDeleteAllSamplesFromEmitter(SoundEmitterID);
 TbBool S3DDestroySoundEmitterAndSamples(SoundEmitterID);
 void S3DSetLineOfSightFunction(S3D_LineOfSight_Func);
+void S3DSetPositionMapFunction(S3D_PositionMap_Func);
 void S3DSetDeadzoneRadius(long dzradius);
 
 void play_non_3d_sample(SoundSmplTblID);

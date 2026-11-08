@@ -37,6 +37,7 @@ short at_training_room(struct Thing *thing);
 short training(struct Thing *thing);
 TbBool creature_can_be_trained(const struct Thing *thing);
 TbBool player_can_afford_to_train_creature(const struct Thing *thing);
+TbBool first_person_train_at_post(struct Thing *creatng, long swing_turns);
 /******************************************************************************/
 #ifdef __cplusplus
 }

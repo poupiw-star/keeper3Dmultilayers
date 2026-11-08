@@ -18,6 +18,11 @@ void GLContextSDL::RequestWindowAttributes()
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+#if defined(__APPLE__)
+    // macOS only hands out a 3.2+ core context when it is forward-compatible
+    // (it then gives 4.1, which runs the 330 core shaders).
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     // World geometry depth-tests tile/flat-poly draws for correct
     // near/far ordering -- request a depth buffer explicitly rather than

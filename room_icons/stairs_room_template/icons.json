@@ -1,0 +1,16 @@
+[
+  {
+    "name": "STAIRS_ROOM_BIG",
+    "file": [
+      "stairs_room/stairs_room_big_std.png",
+      "stairs_room/stairs_room_big_dis.png"
+    ]
+  },
+  {
+    "name": "STAIRS_ROOM_SMALL",
+    "file": [
+      "stairs_room/stairs_room_small_std.png",
+      "stairs_room/stairs_room_small_dis.png"
+    ]
+  }
+]

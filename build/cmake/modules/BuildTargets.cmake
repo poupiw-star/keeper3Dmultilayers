@@ -10,7 +10,7 @@ list(FILTER KEEPERFX_SOURCES_CXX EXCLUDE REGEX "/src/ftests/")
 # Desktop platform filtering (matches the hand Makefiles).
 if(WIN32)
     list(FILTER KEEPERFX_SOURCES_CXX EXCLUDE REGEX "/PlatformLinux\\.cpp$")
-elseif(UNIX AND NOT APPLE)
+elseif(UNIX)  # Linux and macOS share the POSIX platform layer
     list(FILTER KEEPERFX_SOURCES_CXX EXCLUDE REGEX "/PlatformWindows\\.cpp$")
     list(FILTER KEEPERFX_SOURCES_CXX EXCLUDE REGEX "/WindowCompositorWin\\.cpp$")
 endif()

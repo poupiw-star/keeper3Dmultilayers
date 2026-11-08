@@ -307,6 +307,8 @@ static PlayerBitFlags get_navtree_owner_flags(NavColour treeI)
 
 static long navigation_rule_normal(NavColour treeA, NavColour treeB)
 {
+    if ((treeA & treeB & NAVMAP_STAIRS_END) && ((treeB & NAVMAP_FLOORHEIGHT_MASK) + 1 < (treeA & NAVMAP_FLOORHEIGHT_MASK)))
+      return NavigationRule_Blocked;
     if ((treeB & NAVMAP_FLOORHEIGHT_MASK) - (treeA & NAVMAP_FLOORHEIGHT_MASK) > 1)
       return NavigationRule_Blocked;
     if ((treeB & (NAVMAP_OWNERSELECT_MASK | NAVMAP_UNSAFE_SURFACE | NAVMAP_ABYSS)) == 0)
@@ -358,6 +360,48 @@ static TbBool navigation_triangle_reachable(int32_t first_triangle, int32_t seco
         }
     }
     return false;
+}
+
+void ariadne_reachable_from(const struct Thing *thing, const struct Coord3d *srcpos, const struct Coord3d *dsts, int dsts_count, TbBool *reachable)
+{
+    for (int d = 0; d < dsts_count; d++)
+        reachable[d] = false;
+    const int32_t src_tri = triangle_findSE8(srcpos->x.val, srcpos->y.val);
+    if (src_tri < 0)
+        return;
+    nav_thing_can_travel_over_lava = creature_can_travel_over_lava(thing);
+    nav_thing_is_flying = flag_is_set(thing->movement_flags, TMvF_Flying);
+    owner_player_navigating = thing->owner;
+    // One search from the source tags every triangle it can reach; then each destination is a lookup.
+    tags_init();
+    store_current_tag(src_tri);
+    tree_val[0] = src_tri;
+    for (uint32_t head = 0, tail = 1; head < tail; head++) {
+        int32_t triangle = tree_val[head];
+        for (int32_t edge = 0; edge < 3; edge++) {
+            int32_t next = Triangles[triangle].tags[edge];
+            if (next < 0 || is_current_tag(next)) {
+                continue;
+            }
+            NavColour next_alt = get_triangle_tree_alt(next);
+            if ((next_alt & NAVMAP_FLOORHEIGHT_MASK) == NAVMAP_FLOORHEIGHT_MAX) {
+                continue;
+            }
+            if (!navigation_rule_normal(get_triangle_tree_alt(triangle), next_alt)) {
+                continue;
+            }
+            store_current_tag(next);
+            tree_val[tail++] = next;
+        }
+    }
+    for (int d = 0; d < dsts_count; d++)
+    {
+        const int32_t dst_tri = triangle_findSE8(dsts[d].x.val, dsts[d].y.val);
+        reachable[d] = (dst_tri >= 0) && is_current_tag(dst_tri);
+    }
+    nav_thing_can_travel_over_lava = 0;
+    nav_thing_is_flying = 0;
+    owner_player_navigating = -1;
 }
 
 void set_nav_rule_default(void)

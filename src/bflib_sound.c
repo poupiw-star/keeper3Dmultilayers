@@ -47,6 +47,7 @@ struct SoundEmitter emitter[128];
 static long MaxNoSounds;
 static struct S3DSample SampleList[SOUNDS_MAX_COUNT];
 static S3D_LineOfSight_Func LineOfSightFunction;
+static S3D_PositionMap_Func PositionMapFunction = NULL;
 static long deadzone_radius;
 
 TbBool SoundDisabled;
@@ -307,6 +308,11 @@ void S3DSetLineOfSightFunction(S3D_LineOfSight_Func callback)
     LineOfSightFunction = callback;
 }
 
+void S3DSetPositionMapFunction(S3D_PositionMap_Func callback)
+{
+    PositionMapFunction = callback;
+}
+
 void S3DSetDeadzoneRadius(long dzradius)
 {
     deadzone_radius = dzradius;
@@ -442,11 +448,24 @@ long get_emitter_pan_volume_pitch(struct SoundReceiver *recv, struct SoundEmitte
         *pitch = 100;
         return 1;
     }
-    long dist = get_emitter_distance(recv, emit);
-    if ((emit->emitter_flags & 0x04) != 0) {
+    // Hear the emitter where it would be relative to the receiver; on another dungeon layer that is a storey away.
+    struct SoundEmitter mapped_emit = *emit;
+    long other_layer = 0;
+    if (PositionMapFunction != NULL)
+    {
+        long ex = (long)emit->pos.val_x;
+        long ey = (long)emit->pos.val_y;
+        long ez = (long)emit->pos.val_z;
+        other_layer = PositionMapFunction((long)recv->pos.val_x, (long)recv->pos.val_y, (long)recv->pos.val_z, &ex, &ey, &ez);
+        mapped_emit.pos.val_x = (unsigned long)ex;
+        mapped_emit.pos.val_y = (unsigned long)ey;
+        mapped_emit.pos.val_z = (unsigned long)ez;
+    }
+    long dist = get_emitter_distance(recv, &mapped_emit);
+    if (((emit->emitter_flags & 0x04) != 0) || (other_layer != 0)) {
         on_sight = 1;
     } else {
-        on_sight = get_emitter_sight(recv, emit);
+        on_sight = get_emitter_sight(recv, &mapped_emit);
     }
     long i = get_emitter_volume(recv, emit, dist);
     if (on_sight) {
@@ -456,7 +475,7 @@ long get_emitter_pan_volume_pitch(struct SoundReceiver *recv, struct SoundEmitte
     }
     i = (dist - deadzone_radius);
     if (i >= 128) {
-        *pan = get_emitter_pan(recv, emit);
+        *pan = get_emitter_pan(recv, &mapped_emit);
     } else {
         *pan = 64;
     }

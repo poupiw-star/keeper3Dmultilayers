@@ -1,4 +1,4 @@
-# Helpers.cmake - shared functions for the desktop (Windows/MinGW + Linux) build.
+# Helpers.cmake - shared functions for the desktop (Windows/MinGW, Linux, macOS) build.
 
 function(kfx_status PREFIX MESSAGE)
     message(STATUS "[${PREFIX}] ${MESSAGE}")
@@ -24,6 +24,20 @@ function(apply_keeperfx_warnings TARGET)
             -Werror -Wno-format-truncation
             -march=x86-64 -fno-omit-frame-pointer -fmessage-length=0 -O3
             $<$<COMPILE_LANGUAGE:C>:-Wimplicit>)
+    elseif(APPLE)
+        # Apple clang: no -march (arm64 or x86_64 is chosen by CMAKE_OSX_ARCHITECTURES)
+        # and no -Werror yet - clang reports warnings GCC does not, and the macOS
+        # build is not yet checked in CI. Set KFX_MACOS_WERROR=ON to opt in.
+        target_compile_options(${TARGET} PRIVATE
+            -Wall -Wextra -Wno-unused-parameter -Wno-unknown-pragmas
+            -Wno-unknown-warning-option -Wno-sign-compare
+            -g -O3
+            # No fused multiply-add: keeps game maths identical to x86 for multiplayer/replays.
+            -ffp-contract=off
+            $<$<COMPILE_LANGUAGE:C>:-Wno-absolute-value>)
+        if(KFX_MACOS_WERROR)
+            target_compile_options(${TARGET} PRIVATE -Werror)
+        endif()
     else()
         target_compile_options(${TARGET} PRIVATE
             -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unknown-pragmas
@@ -52,6 +66,9 @@ function(apply_keeperfx_link_flags TARGET)
             -mwindows -static-libgcc -static-libstdc++
             -Wl,--enable-auto-import -Wl,-Map,${TARGET}.map)
         target_link_libraries(${TARGET} PUBLIC -static stdc++ winpthread -dynamic)
+    elseif(APPLE)
+        # -rdynamic exports symbols so the crash handler's backtrace can name them.
+        target_link_options(${TARGET} PRIVATE -rdynamic)
     else()
         target_link_options(${TARGET} PRIVATE -g -rdynamic)
     endif()

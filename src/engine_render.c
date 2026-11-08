@@ -71,7 +71,14 @@
 #include "thing_traps.h"
 #include "vidfade.h"
 #include "vidmode.h"
+#include "map_layers.h"
+#include "map_connectors.h"
 
+#include "map_layer_dig.h"
+#include "creature_instances.h"
+#include "creature_control.h"
+#include "map_columns.h"
+#include "player_data.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -102,8 +109,15 @@ struct PlayerInfo;
    column with every cube filled draw its top face and topmost side at ceiling height. */
 #define ENGINE_COL_CEILING_CORNER (COLUMN_STACK_HEIGHT + ABYSS_WALL_RENDER_HEIGHT + 3)
 
+/* Dungeon layers: corners down a pit, one per cube of depth (0 = this layer's floor level). */
+#define ENGINE_COL_PIT_DOWN_BASE (ENGINE_COL_CEILING_CORNER + 1)
+/* Dungeon layers, first-person view: corners of the layer above, one storey up, for heights 0..COLUMN_STACK_HEIGHT. */
+#define ENGINE_COL_PIT_UP_BASE (ENGINE_COL_PIT_DOWN_BASE + LAYER_PIT_MAX_DEPTH + 1)
+/* The ceiling of the layer above. */
+#define ENGINE_COL_PIT_UP_CEILING (ENGINE_COL_PIT_UP_BASE + COLUMN_STACK_HEIGHT + 1)
+
 struct EngineCol {
-    struct EngineCoord cors[ENGINE_COL_CEILING_CORNER + 1];
+    struct EngineCoord cors[ENGINE_COL_PIT_UP_CEILING + 1];
 };
 
 struct SideOri {
@@ -186,7 +200,38 @@ unsigned char *getpoly;
 unsigned char poly_pool[POLY_POOL_SIZE];
 unsigned char *poly_pool_end;
 struct BasicQ *buckets[BUCKETS_COUNT];
+/* Dungeon layers: every other visible layer is drawn by the normal scene builder, with the camera moved to
+ * the same spot on that layer and a storey up or down, into its own bucket list. Those lists are drawn before
+ * the main one, farthest layer first; other layers are only visible through pits, so the viewer's own floors,
+ * walls and ceilings then cover them everywhere else, whatever the painter's order says. */
+struct BasicQ *layer_buckets[MAX_MAP_LAYERS][BUCKETS_COUNT];
+int layer_pass_order[MAX_MAP_LAYERS];
+int layer_pass_count = 0;
+/** Bucket list being filled: buckets[] for the viewer's layer, layer_buckets[n] for layer n. */
+static struct BasicQ **render_bucket_list = buckets;
+/** Layer being drawn (the viewer's, or another one in its pass); -1 on maps without layers. */
+static int render_layer = -1;
+#define BUCKET_LIST render_bucket_list
+#define render_into_backdrop (render_bucket_list != buckets)
+
+/** Item list of a bucket counted over all lists drawn in a frame: [0, BUCKETS_COUNT) is the main list,
+ * each further BUCKETS_COUNT is another layer's, the last one being the farthest (drawn first). */
+static struct BasicQ *bucket_items_at(long bucket_pos)
+{
+    const long list = bucket_pos / BUCKETS_COUNT;
+    const long bucket = bucket_pos % BUCKETS_COUNT;
+    if (list == 0)
+        return buckets[bucket];
+    return layer_buckets[layer_pass_order[layer_pass_count - list]][bucket];
+}
 long cells_away;
+/** Dungeon layers: extra depth given to another layer drawn in the overhead view, which lies storeys away
+ * from the camera, so none of it ends up at the near limit of the depth range. */
+long layer_depth_bias = 0;
+/** Dungeon layers: while another layer is drawn, how many more cells around the camera to draw overhead. That
+ * layer is seen storeys up or down, so what shows of it is not where the screen limits of this layer are; the
+ * area drawn is a plain circle around the camera, made bigger by this. 0 for the viewer's own layer. */
+static long layer_extra_cells = 0;
 long max_i_can_see;
 const int MAX_I_CAN_SEE_OVERHEAD = (MINMAX_LENGTH/2)-2;
 struct EngineCol ecs1[MINMAX_LENGTH-1];
@@ -749,9 +794,9 @@ static struct BasicQ *get_bucket_item(int min_cor_z, enum QKinds kind, size_t si
     struct BasicQ * kspr;
     kspr = (struct BasicQ *)getpoly;
     getpoly += size;
-    kspr->next = buckets[bckt_idx];
+    kspr->next = BUCKET_LIST[bckt_idx];
     kspr->kind = kind;
-    buckets[bckt_idx] = (struct BasicQ *)kspr;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)kspr;
     return kspr;
 }
 
@@ -789,18 +834,54 @@ static int32_t get_column_top_cube(const struct Column *colmn)
 
 static TbBool map_block_has_rendered_abyss(const struct Map *mapblk, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
-    return cube_is_abyss(game.top_cube[get_abyss_wall_column(get_map_column(mapblk), mapblk, stl_x, stl_y)->floor_texture]);
+    return cube_is_abyss(game.top_cube[get_abyss_wall_column(get_map_column(mapblk), mapblk, stl_x, stl_y)->floor_texture])
+        || subtile_is_layer_fall_pit(stl_x, stl_y);
 }
 
-static void fill_in_abyss_points_parallel(struct WibbleTable *wibl, struct EngineCol *ecol, int32_t eview_w, int32_t hview_y, int32_t hview_z, int32_t dview_h, int32_t dview_z, int32_t lightness)
+/** Corner of a hole that touches only pits (no real abyss): its shaft stays lit and stops at the floor below. */
+static TbBool corner_touches_only_pits(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    if (!map_has_layers())
+        return false;
+    TbBool any_pit = false;
+    for (int dy = -1; dy <= 0; dy++)
+    {
+        for (int dx = -1; dx <= 0; dx++)
+        {
+            struct Map *mapblk = get_map_block_at(stl_x + dx, stl_y + dy);
+            if (map_block_invalid(mapblk))
+                continue;
+            if (subtile_is_layer_fall_pit(stl_x + dx, stl_y + dy))
+                any_pit = true;
+            else if (map_block_has_rendered_abyss(mapblk, stl_x + dx, stl_y + dy))
+                return false;
+        }
+    }
+    return any_pit;
+}
+
+/** True if a corner needs the corners down to the layer below: it is near a pit (one slab more than the drawn area). */
+static TbBool corner_near_layer_pit(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    return subtile_layer_pit_distance(stl_x, stl_y) <= LAYER_BELOW_VIEW_RADIUS + 1;
+}
+
+/** Shade down a pit shaft: lit like the room below, a little darker with depth. */
+static int32_t LAYER_PIT_SHADE(int32_t lightness, int32_t depth)
+{
+    return lightness * max(30, 100 - 35 * depth / LAYER_PIT_VIEW_DEPTH) / 100;
+}
+
+static void fill_in_abyss_points_parallel(struct WibbleTable *wibl, struct EngineCol *ecol, int32_t eview_w, int32_t hview_y, int32_t hview_z, int32_t dview_h, int32_t dview_z, int32_t lightness, TbBool pit_only)
 {
     ecol->cors[COLUMN_STACK_HEIGHT + 1] = ecol->cors[0];
-    ecol->cors[COLUMN_STACK_HEIGHT + 1].shade_intensity = ABYSS_SHADE(ecol->cors[0].shade_intensity, 0);
+    ecol->cors[COLUMN_STACK_HEIGHT + 1].shade_intensity = pit_only ? ecol->cors[0].shade_intensity : ABYSS_SHADE(ecol->cors[0].shade_intensity, 0);
     int32_t idxh;
     for (idxh = 1; idxh <= ABYSS_WALL_RENDER_HEIGHT + 1; idxh++) {
         int32_t depth = idxh;
         if (depth > ABYSS_WALL_RENDER_HEIGHT) {
-            depth = ABYSS_DEPTH;
+            // A pit's shaft ends at the floor of the layer below; an abyss goes on into the dark.
+            depth = pit_only ? LAYER_PIT_VIEW_DEPTH : ABYSS_DEPTH;
         }
         struct EngineCoord *ecord = &ecol->cors[COLUMN_STACK_HEIGHT + idxh + 1];
         struct WibbleTable *abyss_wibl = &wibl[2 * ((depth - 1) % COLUMN_STACK_HEIGHT)];
@@ -808,7 +889,22 @@ static void fill_in_abyss_points_parallel(struct WibbleTable *wibl, struct Engin
         ecord->view_height = (hview_y - dview_h * depth + abyss_wibl->view_height_offset) >> 8;
         ecord->z = clamp(hview_z - dview_z * depth, 0, Z_DRAW_DISTANCE_MAX);
         ecord->clip_flags = 0;
-        ecord->shade_intensity = ABYSS_SHADE(lightness, depth);
+        ecord->shade_intensity = pit_only ? LAYER_PIT_SHADE(lightness, depth) : ABYSS_SHADE(lightness, depth);
+    }
+}
+
+/** Corners down to the layer below, one per cube of depth, for pits and the ground around them. */
+static void fill_in_pit_points_parallel(struct WibbleTable *wibl, struct EngineCol *ecol, int32_t eview_w, int32_t hview_y, int32_t hview_z, int32_t dview_h, int32_t dview_z, int32_t lightness)
+{
+    ecol->cors[ENGINE_COL_PIT_DOWN_BASE] = ecol->cors[0];
+    for (int32_t depth = 1; depth <= LAYER_PIT_MAX_DEPTH; depth++) {
+        struct EngineCoord *ecord = &ecol->cors[ENGINE_COL_PIT_DOWN_BASE + depth];
+        struct WibbleTable *pit_wibl = &wibl[2 * ((depth - 1) % COLUMN_STACK_HEIGHT)];
+        ecord->view_width = (eview_w + pit_wibl->view_width_offset) >> 8;
+        ecord->view_height = (hview_y - dview_h * depth + pit_wibl->view_height_offset) >> 8;
+        ecord->z = clamp(hview_z - dview_z * depth, 0, Z_DRAW_DISTANCE_MAX);
+        ecord->clip_flags = 0;
+        ecord->shade_intensity = LAYER_PIT_SHADE(lightness, depth);
     }
 }
 
@@ -953,14 +1049,42 @@ static void fill_in_points_perspective(struct Camera *cam, long bstl_x, long bst
             ecord->shade_intensity = lightness;
             rotpers(ecord, &camera_matrix);
         }
+        MapSubtlCoord above_x = stl_x;
+        MapSubtlCoord above_y = stl_y + 1;
+        if (map_has_layers() && get_subtile_above_layer(&above_x, &above_y))
+        {
+            // Corners of the layer above, one storey up, for looking up through a pit.
+            struct WibbleTable *up_wibl = get_wibble_from_table(cam, 32 * wib_v + wib_x + (wib_y << 2), stl_x, stl_y);
+            // Light from the room below shines up through the pit, so use whichever is brighter.
+            const int32_t up_light = max(get_subtile_lightness(&game.lish, above_x, above_y),
+                get_subtile_lightness(&game.lish, stl_x, stl_y + 1) * 3 / 4);
+            for (idxh = 0; idxh <= 0; idxh++) {
+                struct WibbleTable *w = &up_wibl[2 * (idxh % COLUMN_STACK_HEIGHT)];
+                ecord = &ecol->cors[ENGINE_COL_PIT_UP_BASE + idxh];
+                ecord->x = apos + w->offset_x;
+                ecord->y = subtile_coord(LAYER_STOREY_CUBES + idxh, 0) - view_alt + w->offset_y;
+                ecord->z = bpos + w->offset_z;
+                ecord->clip_flags = 0;
+                ecord->shade_intensity = up_light;
+                rotpers(ecord, &camera_matrix);
+            }
+            ecord = &ecol->cors[ENGINE_COL_PIT_UP_CEILING];
+            ecord->x = apos + up_wibl->offset_x;
+            ecord->y = subtile_coord(LAYER_STOREY_CUBES + get_mapblk_filled_subtiles(get_map_block_at(above_x, above_y)), 0) - view_alt + up_wibl->offset_y;
+            ecord->z = bpos + up_wibl->offset_z;
+            ecord->clip_flags = 0;
+            ecord->shade_intensity = up_light;
+            rotpers(ecord, &camera_matrix);
+        }
         if (abyss_mask != 0) {
             wibl = get_wibble_from_table(cam, 32 * wib_v + wib_x + (wib_y << 2), stl_x, stl_y);
+            const TbBool pit_only = corner_touches_only_pits(stl_x, stl_y + 1);
             ecol->cors[COLUMN_STACK_HEIGHT + 1] = ecol->cors[0];
-            ecol->cors[COLUMN_STACK_HEIGHT + 1].shade_intensity = ABYSS_SHADE(ecol->cors[0].shade_intensity, 0);
+            ecol->cors[COLUMN_STACK_HEIGHT + 1].shade_intensity = pit_only ? ecol->cors[0].shade_intensity : ABYSS_SHADE(ecol->cors[0].shade_intensity, 0);
             for (idxh = 1; idxh <= ABYSS_WALL_RENDER_HEIGHT + 1; idxh++) {
                 int32_t depth = idxh;
                 if (depth > ABYSS_WALL_RENDER_HEIGHT) {
-                    depth = ABYSS_DEPTH;
+                    depth = pit_only ? LAYER_PIT_VIEW_DEPTH : ABYSS_DEPTH;
                 }
                 ecord = &ecol->cors[COLUMN_STACK_HEIGHT + idxh + 1];
                 struct WibbleTable *abyss_wibl = &wibl[2 * ((depth - 1) % COLUMN_STACK_HEIGHT)];
@@ -968,7 +1092,22 @@ static void fill_in_points_perspective(struct Camera *cam, long bstl_x, long bst
                 ecord->y = -depth * COORD_PER_STL - view_alt + abyss_wibl->offset_y;
                 ecord->z = bpos + abyss_wibl->offset_z;
                 ecord->clip_flags = 0;
-                ecord->shade_intensity = ABYSS_SHADE(lightness, depth);
+                ecord->shade_intensity = pit_only ? LAYER_PIT_SHADE(lightness, depth) : ABYSS_SHADE(lightness, depth);
+                rotpers(ecord, &camera_matrix);
+            }
+        }
+        if (map_has_layers() && corner_near_layer_pit(stl_x, stl_y + 1)) {
+            // One corner per cube of depth, for drawing the layer below in and around a pit.
+            struct WibbleTable *pit_base = get_wibble_from_table(cam, 32 * wib_v + wib_x + (wib_y << 2), stl_x, stl_y);
+            ecol->cors[ENGINE_COL_PIT_DOWN_BASE] = ecol->cors[0];
+            for (int32_t depth = 1; depth <= LAYER_PIT_MAX_DEPTH; depth++) {
+                ecord = &ecol->cors[ENGINE_COL_PIT_DOWN_BASE + depth];
+                struct WibbleTable *pit_wibl = &pit_base[2 * ((depth - 1) % COLUMN_STACK_HEIGHT)];
+                ecord->x = apos + pit_wibl->offset_x;
+                ecord->y = -depth * COORD_PER_STL - view_alt + pit_wibl->offset_y;
+                ecord->z = bpos + pit_wibl->offset_z;
+                ecord->clip_flags = 0;
+                ecord->shade_intensity = LAYER_PIT_SHADE(lightness, depth);
                 rotpers(ecord, &camera_matrix);
             }
         }
@@ -1049,7 +1188,7 @@ static void fill_in_points_cluedo(struct Camera *cam, long bstl_x, long bstl_y, 
     int hview_y;
     int hview_z;
     zoom = camera_zoom / pixel_size;
-    view_z = object_origin.z + (cells_away << 8)
+    view_z = object_origin.z + (cells_away << 8) + layer_depth_bias
         + ((bpos * camera_matrix.r[2].v[2]
          + (apos + camera_matrix.r[2].v[1]) * (camera_matrix.r[2].v[0] - view_alt)
           - camera_matrix.r[2].v[3]
@@ -1184,7 +1323,10 @@ static void fill_in_points_cluedo(struct Camera *cam, long bstl_x, long bstl_y, 
             eview_z += dview_z;
         }
         if (abyss_mask != 0) {
-            fill_in_abyss_points_parallel(wibl - 2 * (hmax - hmin + 1), ecol, eview_w, hview_y, hview_z, dview_h, dview_z, lightness);
+            fill_in_abyss_points_parallel(wibl - 2 * (hmax - hmin + 1), ecol, eview_w, hview_y, hview_z, dview_h, dview_z, lightness, corner_touches_only_pits(stl_x, stl_y + 1));
+        }
+        if (map_has_layers() && corner_near_layer_pit(stl_x, stl_y + 1)) {
+            fill_in_pit_points_parallel(wibl - 2 * (hmax - hmin + 1), ecol, eview_w, hview_y, hview_z, dview_h, dview_z, lightness);
         }
         abyss_mask >>= 2;
         stl_x++;
@@ -1291,7 +1433,7 @@ static void fill_in_points_isometric(struct Camera *cam, long bstl_x, long bstl_
           + ((bpos * camera_matrix.r[1].v[2]
            + (apos + camera_matrix.r[1].v[1]) * (camera_matrix.r[1].v[0] - view_alt)
             - hpos - camera_matrix.r[1].v[3]) >> 14)) >> 16);
-    view_z = object_origin.z + (cells_away << 8)
+    view_z = object_origin.z + (cells_away << 8) + layer_depth_bias
         + ((bpos * camera_matrix.r[2].v[2]
          + (apos + camera_matrix.r[2].v[1]) * (camera_matrix.r[2].v[0] - view_alt)
           - hpos - camera_matrix.r[2].v[3]) >> 14);
@@ -1422,7 +1564,10 @@ static void fill_in_points_isometric(struct Camera *cam, long bstl_x, long bstl_
             eview_z += dview_z;
         }
         if (abyss_mask != 0) {
-            fill_in_abyss_points_parallel(wibl - 2 * (hmax - hmin + 1), ecol, eview_w, hview_y, hview_z, dview_h, dview_z, lightness);
+            fill_in_abyss_points_parallel(wibl - 2 * (hmax - hmin + 1), ecol, eview_w, hview_y, hview_z, dview_h, dview_z, lightness, corner_touches_only_pits(stl_x, stl_y + 1));
+        }
+        if (map_has_layers() && corner_near_layer_pit(stl_x, stl_y + 1)) {
+            fill_in_pit_points_parallel(wibl - 2 * (hmax - hmin + 1), ecol, eview_w, hview_y, hview_z, dview_h, dview_z, lightness);
         }
         abyss_mask >>= 2;
         stl_x++;
@@ -2274,9 +2419,9 @@ static void create_line_element(long a1, long a2, long a3, long a4, long bckt_id
         bckt_idx = 0;
     poly = (struct BucketKindSlabSelector *)getpoly;
     getpoly += sizeof(struct BucketKindSlabSelector);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_SlabSelector;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
     if (pixel_size > 0)
     {
         poly->p.X = a1 / pixel_size;
@@ -2307,9 +2452,9 @@ static void create_line_segment(struct EngineCoord *start, struct EngineCoord *e
     // Add to bucket
     poly = (struct BucketKindSlabSelector *)getpoly;
     getpoly += sizeof(struct BucketKindSlabSelector);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_SlabSelector;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
     // Fill parameters
     if (pixel_size > 0)
     {
@@ -2796,9 +2941,9 @@ static void do_a_trig_gourad_tr(struct EngineCoord *engine_coordinate_1, struct 
                 triangle_bucket_near_1 = (struct BucketKindPolygonNearFP *)getpoly;
                 getpoly += sizeof(struct BucketKindPolygonNearFP);
                 triangle_bucket_near_1->subtype = splittypes[16 * (engine_coordinate_3->clip_flags & 3) + 4 * (engine_coordinate_1->clip_flags & 3) + (engine_coordinate_2->clip_flags & 3)];
-                triangle_bucket_near_1->b.next = buckets[divided_z];
+                triangle_bucket_near_1->b.next = BUCKET_LIST[divided_z];
                 triangle_bucket_near_1->b.kind = QK_PolygonNearFP;
-                buckets[divided_z] = &triangle_bucket_near_1->b;
+                BUCKET_LIST[divided_z] = &triangle_bucket_near_1->b;
                 triangle_bucket_near_1->block = textr_idx;
                 triangle_bucket_near_1->vertex_first.X = engine_coordinate_1->view_width;
                 triangle_bucket_near_1->vertex_first.Y = engine_coordinate_1->view_height;
@@ -2905,9 +3050,9 @@ static void do_a_trig_gourad_tr(struct EngineCoord *engine_coordinate_1, struct 
                             triangle_bucket_near_4 = (struct BucketKindPolygonNearFP *)getpoly;
                             getpoly += sizeof(struct BucketKindPolygonNearFP);
                             triangle_bucket_near_4->subtype = splittypes[16 * (engine_coordinate_3->clip_flags & 3) + 4 * (engine_coordinate_1->clip_flags & 3) + (engine_coordinate_2->clip_flags & 3)];
-                            triangle_bucket_near_4->b.next = buckets[divided_z];
+                            triangle_bucket_near_4->b.next = BUCKET_LIST[divided_z];
                             triangle_bucket_near_4->b.kind = QK_PolygonNearFP;
-                            buckets[divided_z] = &triangle_bucket_near_4->b;
+                            BUCKET_LIST[divided_z] = &triangle_bucket_near_4->b;
                             triangle_bucket_near_4->block = textr_idx;
                             triangle_bucket_near_1->coordinate_first.x = engine_coordinate_1->x;
                             triangle_bucket_near_1->coordinate_first.y = engine_coordinate_1->y;
@@ -2957,9 +3102,9 @@ static void do_a_trig_gourad_tr(struct EngineCoord *engine_coordinate_1, struct 
                         triangle_bucket_near_3 = (struct BucketKindPolygonNearFP *)getpoly;
                         getpoly += sizeof(struct BucketKindPolygonNearFP);
                         triangle_bucket_near_3->subtype = splittypes[16 * (engine_coordinate_3->clip_flags & 3) + 4 * (engine_coordinate_1->clip_flags & 3) + (engine_coordinate_2->clip_flags & 3)];
-                        triangle_bucket_near_3->b.next = buckets[divided_z];
+                        triangle_bucket_near_3->b.next = BUCKET_LIST[divided_z];
                         triangle_bucket_near_3->b.kind = QK_PolygonNearFP;
-                        buckets[divided_z] = &triangle_bucket_near_3->b;
+                        BUCKET_LIST[divided_z] = &triangle_bucket_near_3->b;
                         triangle_bucket_near_3->block = textr_idx;
                         triangle_bucket_near_1->coordinate_first.x = engine_coordinate_1->x;
                         triangle_bucket_near_1->coordinate_first.y = engine_coordinate_1->y;
@@ -3041,9 +3186,9 @@ static void do_a_trig_gourad_tr(struct EngineCoord *engine_coordinate_1, struct 
                         triangle_bucket_near_2 = (struct BucketKindPolygonNearFP *)getpoly;
                         getpoly += sizeof(struct BucketKindPolygonNearFP);
                         triangle_bucket_near_2->subtype = splittypes[16 * (engine_coordinate_3->clip_flags & 3) + 4 * (engine_coordinate_1->clip_flags & 3) + (engine_coordinate_2->clip_flags & 3)];
-                        triangle_bucket_near_2->b.next = buckets[divided_z];
+                        triangle_bucket_near_2->b.next = BUCKET_LIST[divided_z];
                         triangle_bucket_near_2->b.kind = QK_PolygonNearFP;
-                        buckets[divided_z] = &triangle_bucket_near_2->b;
+                        BUCKET_LIST[divided_z] = &triangle_bucket_near_2->b;
                         triangle_bucket_near_2->block = textr_idx;
                         triangle_bucket_near_1->coordinate_second.x = engine_coordinate_2->x;
                         triangle_bucket_near_1->coordinate_second.y = engine_coordinate_2->y;
@@ -3145,9 +3290,9 @@ static void do_a_trig_gourad_tr(struct EngineCoord *engine_coordinate_1, struct 
             {
                 triangle_bucket_far = (struct BucketKindPolygonStandard *)getpoly;
                 getpoly += sizeof(struct BucketKindPolygonStandard);
-                triangle_bucket_far->b.next = buckets[divided_z];
+                triangle_bucket_far->b.next = BUCKET_LIST[divided_z];
                 triangle_bucket_far->b.kind = QK_PolygonStandard;
-                buckets[divided_z] = &triangle_bucket_far->b;
+                BUCKET_LIST[divided_z] = &triangle_bucket_far->b;
 
                 triangle_bucket_far->block = textr_idx;
                 triangle_bucket_far->vertex_first.X = engine_coordinate_1->view_width;
@@ -3265,9 +3410,9 @@ static void do_a_trig_gourad_bl(struct EngineCoord *engine_coordinate_1, struct 
                 triangle_bucket_near_1 = (struct BucketKindPolygonNearFP *)getpoly;
                 getpoly += sizeof(struct BucketKindPolygonNearFP);
                 triangle_bucket_near_1->subtype = splittypes[16 * (engine_coordinate_3->clip_flags & 3) + 4 * (engine_coordinate_1->clip_flags & 3) + (engine_coordinate_2->clip_flags & 3)];
-                triangle_bucket_near_1->b.next = buckets[divided_z];
+                triangle_bucket_near_1->b.next = BUCKET_LIST[divided_z];
                 triangle_bucket_near_1->b.kind = QK_PolygonNearFP;
-                buckets[divided_z] = &triangle_bucket_near_1->b;
+                BUCKET_LIST[divided_z] = &triangle_bucket_near_1->b;
                 triangle_bucket_near_1->block = argument4;
 
                 triangle_bucket_near_1->vertex_first.X = engine_coordinate_1->view_width;
@@ -3375,9 +3520,9 @@ static void do_a_trig_gourad_bl(struct EngineCoord *engine_coordinate_1, struct 
                             triangle_bucket_near_4 = (struct BucketKindPolygonNearFP *)getpoly;
                             getpoly += sizeof(struct BucketKindPolygonNearFP);
                             triangle_bucket_near_4->subtype = splittypes[16 * (engine_coordinate_3->clip_flags & 3) + 4 * (engine_coordinate_1->clip_flags & 3) + (engine_coordinate_2->clip_flags & 3)];
-                            triangle_bucket_near_4->b.next = buckets[divided_z];
+                            triangle_bucket_near_4->b.next = BUCKET_LIST[divided_z];
                             triangle_bucket_near_4->b.kind = QK_PolygonNearFP;
-                            buckets[divided_z] = &triangle_bucket_near_4->b;
+                            BUCKET_LIST[divided_z] = &triangle_bucket_near_4->b;
                             triangle_bucket_near_4->block = argument4;
                             triangle_bucket_near_1->coordinate_first.x = engine_coordinate_1->x;
                             triangle_bucket_near_1->coordinate_first.y = engine_coordinate_1->y;
@@ -3427,9 +3572,9 @@ static void do_a_trig_gourad_bl(struct EngineCoord *engine_coordinate_1, struct 
                         triangle_bucket_near_3 = (struct BucketKindPolygonNearFP *)getpoly;
                         getpoly += sizeof(struct BucketKindPolygonNearFP);
                         triangle_bucket_near_3->subtype = splittypes[16 * (engine_coordinate_3->clip_flags & 3) + 4 * (engine_coordinate_1->clip_flags & 3) + (engine_coordinate_2->clip_flags & 3)];
-                        triangle_bucket_near_3->b.next = buckets[divided_z];
+                        triangle_bucket_near_3->b.next = BUCKET_LIST[divided_z];
                         triangle_bucket_near_3->b.kind = QK_PolygonNearFP;
-                        buckets[divided_z] = &triangle_bucket_near_3->b;
+                        BUCKET_LIST[divided_z] = &triangle_bucket_near_3->b;
                         triangle_bucket_near_3->block = argument4;
                         triangle_bucket_near_1->coordinate_first.x = engine_coordinate_1->x;
                         triangle_bucket_near_1->coordinate_first.y = engine_coordinate_1->y;
@@ -3511,9 +3656,9 @@ static void do_a_trig_gourad_bl(struct EngineCoord *engine_coordinate_1, struct 
                         triangle_bucket_near_2 = (struct BucketKindPolygonNearFP *)getpoly;
                         getpoly += sizeof(struct BucketKindPolygonNearFP);
                         triangle_bucket_near_2->subtype = splittypes[16 * (engine_coordinate_3->clip_flags & 3) + 4 * (engine_coordinate_1->clip_flags & 3) + (engine_coordinate_2->clip_flags & 3)];
-                        triangle_bucket_near_2->b.next = buckets[divided_z];
+                        triangle_bucket_near_2->b.next = BUCKET_LIST[divided_z];
                         triangle_bucket_near_2->b.kind = QK_PolygonNearFP;
-                        buckets[divided_z] = &triangle_bucket_near_2->b;
+                        BUCKET_LIST[divided_z] = &triangle_bucket_near_2->b;
                         triangle_bucket_near_2->block = argument4;
                         triangle_bucket_near_1->coordinate_second.x = engine_coordinate_2->x;
                         triangle_bucket_near_1->coordinate_second.y = engine_coordinate_2->y;
@@ -3615,9 +3760,9 @@ static void do_a_trig_gourad_bl(struct EngineCoord *engine_coordinate_1, struct 
             {
                 triangle_bucket_far = (struct BucketKindPolygonStandard *)getpoly;
                 getpoly += sizeof(struct BucketKindPolygonStandard);
-                triangle_bucket_far->b.next = buckets[divided_z];
+                triangle_bucket_far->b.next = BUCKET_LIST[divided_z];
                 triangle_bucket_far->b.kind = QK_PolygonStandard;
-                buckets[divided_z] = &triangle_bucket_far->b;
+                BUCKET_LIST[divided_z] = &triangle_bucket_far->b;
                 triangle_bucket_far->block = argument4;
 
                 triangle_bucket_far->vertex_first.X = engine_coordinate_1->view_width;
@@ -4004,6 +4149,7 @@ static unsigned short engine_remap_abyss_wall_texture_blocks(MapSubtlCoord stl_x
 }
 
 static void draw_abyss(const struct Column *colmn, const struct Map *mapblk, struct EngineCol *bec, struct EngineCol *fec, MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+static void draw_layer_pit_rim_up(struct EngineCol *bec, struct EngineCol *fec, MapSubtlCoord stl_x, MapSubtlCoord stl_y, const struct Column *colmn);
 
 static void do_a_plane_of_engine_columns_perspective(long stl_x, long stl_y, long plane_start, long plane_end)
 {
@@ -4121,6 +4267,7 @@ static void do_a_plane_of_engine_columns_perspective(long stl_x, long stl_y, lon
             height_bit = height_bit << 1;
         }
         TbBool abyss = cube_is_abyss(game.top_cube[colmn->floor_texture]);
+        const TbBool layer_pit = subtile_is_layer_fall_pit(center_x, stl_y);
         draw_abyss(colmn, mapblk, bec, fec, center_x, stl_y);
 
         ecpos = floor_height_table[solidmsk_center];
@@ -4131,7 +4278,7 @@ static void do_a_plane_of_engine_columns_perspective(long stl_x, long stl_y, lon
             textr_idx = engine_remap_top_texture_blocks(center_x, stl_y, texturing->texture_id[4]);
             do_a_trig_gourad_tr(&bec[0].cors[ecpos], &bec[1].cors[ecpos], &fec[1].cors[ecpos], textr_idx, -1);
             do_a_trig_gourad_bl(&fec[1].cors[ecpos], &fec[0].cors[ecpos], &bec[0].cors[ecpos], textr_idx, -1);
-        } else if (!abyss) {
+        } else if (!abyss && !layer_pit) {
             textr_idx = engine_remap_top_texture_blocks(center_x, stl_y, colmn->floor_texture);
             do_a_trig_gourad_tr(&bec[0].cors[ecpos], &bec[1].cors[ecpos], &fec[1].cors[ecpos], textr_idx, -1);
             do_a_trig_gourad_bl(&fec[1].cors[ecpos], &fec[0].cors[ecpos], &bec[0].cors[ecpos], textr_idx, -1);
@@ -4153,7 +4300,10 @@ static void do_a_plane_of_engine_columns_perspective(long stl_x, long stl_y, lon
         }
         // Draw the universal ceiling on top of the columns
         TbBool edge_abyss = abyss && ((center_x == 1) || (center_x == game.map_subtiles_x - 1) || (stl_y == 1) || (stl_y == game.map_subtiles_y - 1));
-        if (!edge_abyss) {
+        // Under a pit the ceiling is open: looking up shows a shaft to the layer above.
+        if (subtile_is_below_layer_pit(center_x, stl_y)) {
+            draw_layer_pit_rim_up(bec, fec, center_x, stl_y, colmn);
+        } else if (!edge_abyss) {
             ecpos = ENGINE_COL_CEILING_CORNER;
             textr_idx = floor_to_ceiling_map[colmn->floor_texture * !abyss];
             textr_idx = engine_remap_texture_blocks(center_x, stl_y, textr_idx);
@@ -4195,12 +4345,12 @@ static void do_a_gpoly_gourad_tr(struct EngineCoord *ec1, struct EngineCoord *ec
         if ( getpoly < poly_pool_end )
         {
             polygon_bucket_ptr = (struct BucketKindPolygonStandard *)getpoly;
-            previous_bucket_item = buckets[bucket_index];
+            previous_bucket_item = BUCKET_LIST[bucket_index];
             getpoly += sizeof(struct BucketKindPolygonStandard);
             current_polygon_bucket->b.next = previous_bucket_item;
             polypoint1 = &current_polygon_bucket->vertex_first;
             current_polygon_bucket->b.kind = 0;
-            buckets[bucket_index] = &current_polygon_bucket->b;
+            BUCKET_LIST[bucket_index] = &current_polygon_bucket->b;
             current_polygon_bucket->block = textr_id;
             ec1_fieldA = ec1->shade_intensity;
             ec2_fieldA = ec2->shade_intensity;
@@ -4254,11 +4404,11 @@ static void do_a_gpoly_unlit_tr(struct EngineCoord *ec1, struct EngineCoord *ec2
         if ( getpoly < poly_pool_end )
         {
             polygon_bucket = (struct BucketKindPolygonStandard *)getpoly;
-            previous_bucket_item = buckets[bucket_index];
+            previous_bucket_item = BUCKET_LIST[bucket_index];
             getpoly += sizeof(struct BucketKindPolygonStandard);
             current_polygon_bucket->b.next = previous_bucket_item;
             current_polygon_bucket->b.kind = 0;
-            buckets[bucket_index] = &current_polygon_bucket->b;
+            BUCKET_LIST[bucket_index] = &current_polygon_bucket->b;
             current_polygon_bucket->block = textr_id;
             current_polygon_bucket->vertex_first.X = ec1->view_width;
             current_polygon_bucket->vertex_first.Y = ec1->view_height;
@@ -4299,11 +4449,11 @@ static void do_a_gpoly_unlit_bl(struct EngineCoord *ec1, struct EngineCoord *ec2
         bucket_index = z / 16;
         if ( getpoly < poly_pool_end )
         {
-        next_bucket_item = buckets[bucket_index];
+        next_bucket_item = BUCKET_LIST[bucket_index];
         getpoly += sizeof(struct BucketKindPolygonStandard);
         current_polygon_bucket->b.next = next_bucket_item;
         current_polygon_bucket->b.kind = 0;
-        buckets[bucket_index] = &current_polygon_bucket->b;
+        BUCKET_LIST[bucket_index] = &current_polygon_bucket->b;
         current_polygon_bucket->block = textr_id;
         current_polygon_bucket->vertex_first.X = ec1->view_width;
         current_polygon_bucket->vertex_first.Y = ec1->view_height;
@@ -4352,12 +4502,12 @@ static void do_a_gpoly_gourad_bl(struct EngineCoord *ec1, struct EngineCoord *ec
         if ( getpoly < poly_pool_end )
         {
             poly_ptr = (struct BucketKindPolygonStandard *)getpoly;
-            previous_bucket_item = buckets[zdiv16];
+            previous_bucket_item = BUCKET_LIST[zdiv16];
             getpoly += sizeof(struct BucketKindPolygonStandard);
             current_polygon_bucket->b.next = previous_bucket_item;
             polypoint1 = &current_polygon_bucket->vertex_first;
             current_polygon_bucket->b.kind = 0;
-            buckets[zdiv16] = &current_polygon_bucket->b;
+            BUCKET_LIST[zdiv16] = &current_polygon_bucket->b;
             current_polygon_bucket->block = textr_id;
             ec1_fieldA = ec1->shade_intensity;
             ec2_fieldA = ec2->shade_intensity;
@@ -4389,10 +4539,127 @@ static void do_a_gpoly_gourad_bl(struct EngineCoord *ec1, struct EngineCoord *ec
     }
 }
 
+/**
+ * Draws the floor of the layer below at the bottom of a pit, so the player sees down.
+ * @param use_trig True in first-person view, which draws with the clipped triangle functions.
+ */
+/** One textured quad, split in two triangles, with the clipped functions in first-person view. */
+static void draw_pit_quad(struct EngineCoord *a, struct EngineCoord *b, struct EngineCoord *c, struct EngineCoord *d, unsigned short textr_idx, int shade, TbBool use_trig)
+{
+    if (use_trig || (lens_mode != 0)) {
+        do_a_trig_gourad_tr(a, b, c, textr_idx, shade);
+        do_a_trig_gourad_bl(c, d, a, textr_idx, shade);
+    } else {
+        do_a_gpoly_gourad_tr(a, b, c, textr_idx, shade);
+        do_a_gpoly_gourad_bl(c, d, a, textr_idx, shade);
+    }
+}
+
+/**
+ * First-person view from under a pit: short walls close the gap between this room's ceiling
+ * and the underside of the layer above, on the edges of the opening.
+ */
+static void draw_layer_pit_rim_up_impl(struct EngineCol *bec, struct EngineCol *fec, MapSubtlCoord stl_x, MapSubtlCoord stl_y, const struct Column *colmn);
+static void draw_layer_pit_rim_up(struct EngineCol *bec, struct EngineCol *fec, MapSubtlCoord stl_x, MapSubtlCoord stl_y, const struct Column *colmn)
+{
+    // Seen only through the hole in the ceiling, with the layer above: draw it in that layer's list.
+    if ((render_layer < 0) || (render_layer + 1 >= game.layers_count))
+        return;
+    struct BasicQ **prev = render_bucket_list;
+    render_bucket_list = layer_buckets[render_layer + 1];
+    draw_layer_pit_rim_up_impl(bec, fec, stl_x, stl_y, colmn);
+    render_bucket_list = prev;
+}
+
+static void draw_layer_pit_rim_up_impl(struct EngineCol *bec, struct EngineCol *fec, MapSubtlCoord stl_x, MapSubtlCoord stl_y, const struct Column *colmn)
+{
+    const int lo = ENGINE_COL_CEILING_CORNER;
+    const int hi = ENGINE_COL_PIT_UP_BASE;
+    const unsigned short textr_idx = engine_remap_texture_blocks(stl_x, stl_y, floor_to_ceiling_map[colmn->floor_texture]);
+    if (!subtile_is_below_layer_pit(stl_x, stl_y - 1))
+        draw_pit_quad(&bec[0].cors[hi], &bec[1].cors[hi], &bec[1].cors[lo], &bec[0].cors[lo], textr_idx, normal_shade_front, true);
+    if (!subtile_is_below_layer_pit(stl_x, stl_y + 1))
+        draw_pit_quad(&fec[1].cors[hi], &fec[0].cors[hi], &fec[0].cors[lo], &fec[1].cors[lo], textr_idx, normal_shade_back, true);
+    if (!subtile_is_below_layer_pit(stl_x - 1, stl_y))
+        draw_pit_quad(&fec[0].cors[hi], &bec[0].cors[hi], &bec[0].cors[lo], &fec[0].cors[lo], textr_idx, normal_shade_right, true);
+    if (!subtile_is_below_layer_pit(stl_x + 1, stl_y))
+        draw_pit_quad(&bec[1].cors[hi], &fec[1].cors[hi], &fec[1].cors[lo], &bec[1].cors[lo], textr_idx, normal_shade_left, true);
+}
+
+/**
+ * First-person view near a pit: draws the column of the layer above, one storey up, with its ceiling,
+ * so looking up through the opening shows that layer's ledges, walls and ceiling.
+ */
+/** Corner of a pit at a given depth (in cubes below this layer's floor level), lit with the light of the given subtile. */
+static struct EngineCoord pit_corner(const struct EngineCol *ec, int depth, MapSubtlCoord light_x, MapSubtlCoord light_y)
+{
+    struct EngineCoord cor = ec->cors[ENGINE_COL_PIT_DOWN_BASE + clamp(depth, 0, LAYER_PIT_MAX_DEPTH)];
+    cor.shade_intensity = get_subtile_lightness(&game.lish, light_x, light_y);
+    return cor;
+}
+
+/**
+ * The rock under a storey's floor, on the edge of a pit in that storey: from the floor level down to the
+ * ceiling of the room under it, looking like that ceiling does from below. Further down, the room itself is drawn.
+ * @param stl_x,stl_y Subtile on the viewer's layer.
+ * @param storey Storeys below the viewer's layer of the floor the band hangs from (0 = the viewer's own floor).
+ * @param side 0 front, 1 left, 2 back, 3 right, as in draw_abyss().
+ */
+static void draw_layer_storey_band(struct EngineCol *ea, struct EngineCol *eb, int side, MapSubtlCoord stl_x, MapSubtlCoord stl_y, int storey, int32_t shade)
+{
+    const unsigned char face_index[4] = {sideoris[0].front_texture_index, sideoris[0].bottom_texture_index,
+        sideoris[0].back_texture_index, sideoris[0].top_texture_index};
+    MapSubtlCoord below_x = stl_x;
+    MapSubtlCoord below_y = stl_y;
+    if (!get_subtile_layers_below(&below_x, &below_y, storey + 1))
+        return;
+    const struct Column *below_colmn = get_map_column(get_map_block_at(below_x, below_y));
+    const int ceiling_cubes = clamp(get_ceiling_height_at_subtile(below_x, below_y) / COORD_PER_STL, 0, COLUMN_STACK_HEIGHT);
+    const unsigned short ceiling_textr = engine_remap_texture_blocks(below_x, below_y, floor_to_ceiling_map[below_colmn->floor_texture]);
+    const int base = storey * LAYER_STOREY_CUBES;
+    for (int depth = 1; depth <= LAYER_STOREY_CUBES - ceiling_cubes; depth++)
+    {
+        const int k = LAYER_STOREY_CUBES - depth;
+        unsigned short textr_idx = ceiling_textr;
+        if ((k >= 0) && (k < COLUMN_STACK_HEIGHT) && ((below_colmn->solidmask & (1 << k)) != 0)) {
+            struct CubeConfigStats *cubed = get_cube_model_stats(below_colmn->cubes[k]);
+            textr_idx = engine_remap_texture_blocks(below_x, below_y, cubed->texture_id[face_index[side & 3]]);
+        }
+        struct EngineCoord a_top = pit_corner(ea, base + depth - 1, below_x, below_y);
+        struct EngineCoord b_top = pit_corner(eb, base + depth - 1, below_x, below_y);
+        struct EngineCoord b_bot = pit_corner(eb, base + depth, below_x, below_y);
+        struct EngineCoord a_bot = pit_corner(ea, base + depth, below_x, below_y);
+        draw_pit_quad(&a_top, &b_top, &b_bot, &a_bot, textr_idx, shade, false);
+    }
+}
+
+/** One side of a pit in the viewer's own layer, seen from inside it. */
+static void draw_layer_pit_wall_impl(struct EngineCol *ea, struct EngineCol *eb, int side, MapSubtlCoord stl_x, MapSubtlCoord stl_y, int32_t top_cube, int32_t shade);
+static void draw_layer_pit_wall(struct EngineCol *ea, struct EngineCol *eb, int side, MapSubtlCoord stl_x, MapSubtlCoord stl_y, int32_t top_cube, int32_t shade)
+{
+    // The walls of a pit are only seen through it, with the layer below: draw them in that layer's list.
+    if (render_layer < 1)
+        return;
+    struct BasicQ **prev = render_bucket_list;
+    render_bucket_list = layer_buckets[render_layer - 1];
+    draw_layer_pit_wall_impl(ea, eb, side, stl_x, stl_y, top_cube, shade);
+    render_bucket_list = prev;
+}
+
+static void draw_layer_pit_wall_impl(struct EngineCol *ea, struct EngineCol *eb, int side, MapSubtlCoord stl_x, MapSubtlCoord stl_y, int32_t top_cube, int32_t shade)
+{
+    draw_layer_storey_band(ea, eb, side, stl_x, stl_y, 0, shade);
+}
+
+/**
+ * Draws what can be seen below a subtile in or near a pit: the layer below, and the layers further
+ * down wherever a storey has a pit (or one close by) to look through.
+ * @param use_trig True in first-person view, which draws with the clipped triangle functions.
+ */
 static void draw_abyss(const struct Column *colmn, const struct Map *mapblk, struct EngineCol *bec, struct EngineCol *fec, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
     colmn = get_abyss_wall_column(colmn, mapblk, stl_x, stl_y);
-    if (cube_is_abyss(game.top_cube[colmn->floor_texture])) {
+    if (cube_is_abyss(game.top_cube[colmn->floor_texture]) || subtile_is_layer_fall_pit(stl_x, stl_y)) {
         return;
     }
     int32_t side;
@@ -4406,6 +4673,11 @@ static void draw_abyss(const struct Column *colmn, const struct Map *mapblk, str
         MapSubtlCoord adjacent_y = stl_y + y_step1[side];
         struct Map *adjacent_map = get_map_block_at(adjacent_x, adjacent_y);
         if (!map_block_revealed(adjacent_map, my_player_number) || !map_block_has_rendered_abyss(adjacent_map, adjacent_x, adjacent_y)) {
+            continue;
+        }
+        if (subtile_is_layer_fall_pit(adjacent_x, adjacent_y)) {
+            // A pit's side is real rock and the walls of the room below, not the plain abyss wall.
+            draw_layer_pit_wall(edges[side + 1], edges[side], side, stl_x, stl_y, cube, shades[side]);
             continue;
         }
         unsigned short textr_idx = engine_remap_abyss_wall_texture_blocks(stl_x, stl_y, cube, (side + 2) & 3);
@@ -4578,7 +4850,7 @@ static void do_a_plane_of_engine_columns_cluedo(long stl_x, long stl_y, long pla
             ncor_raw = floor_height_table[solidmsk_cur_raw];
             if ( (render_map_flags & SlbAtFlg_Unexplored) != 0 )
             {
-                unsigned short textr_id = engine_remap_texture_blocks(stl_x + xaval + xidx, stl_y, TEXTURE_LAND_MARKED_LAND);
+                unsigned short textr_id = engine_remap_texture_blocks(stl_x + xaval + xidx, stl_y, layer_marked_land_texture(stl_x + xaval + xidx, stl_y));
                 do_a_gpoly_unlit_tr(&bec[0].cors[ncor], &bec[1].cors[ncor], &fec[1].cors[ncor], textr_id);
                 do_a_gpoly_unlit_bl(&fec[1].cors[ncor], &fec[0].cors[ncor], &bec[0].cors[ncor], textr_id);
             } else
@@ -4598,13 +4870,13 @@ static void do_a_plane_of_engine_columns_cluedo(long stl_x, long stl_y, long pla
                     do_a_gpoly_gourad_bl(&fec[1].cors[ncor], &fec[0].cors[ncor], &bec[0].cors[ncor], textr_id, -1);
                 }
             }
-        } else if (!cube_is_abyss(game.top_cube[cur_colmn->floor_texture])) {
+        } else if (!cube_is_abyss(game.top_cube[cur_colmn->floor_texture]) && !subtile_is_layer_fall_pit(stl_x + xaval + xidx, stl_y)) {
             if ((render_map_flags & SlbAtFlg_Unexplored) == 0) {
                 unsigned short textr_id = engine_remap_top_texture_blocks(stl_x + xaval + xidx, stl_y, cur_colmn->floor_texture);
                 do_a_gpoly_gourad_tr(&bec[0].cors[0], &bec[1].cors[0], &fec[1].cors[0], textr_id, -1);
                 do_a_gpoly_gourad_bl(&fec[1].cors[0], &fec[0].cors[0], &bec[0].cors[0], textr_id, -1);
             } else {
-                unsigned short textr_id = engine_remap_texture_blocks(stl_x + xaval + xidx, stl_y, TEXTURE_LAND_MARKED_LAND);
+                unsigned short textr_id = engine_remap_texture_blocks(stl_x + xaval + xidx, stl_y, layer_marked_land_texture(stl_x + xaval + xidx, stl_y));
                 do_a_gpoly_unlit_tr(&bec[0].cors[0], &bec[1].cors[0], &fec[1].cors[0], textr_id);
                 do_a_gpoly_unlit_bl(&fec[1].cors[0], &fec[0].cors[0], &bec[0].cors[0], textr_id);
             }
@@ -4764,7 +5036,7 @@ static void do_a_plane_of_engine_columns_isometric(long stl_x, long stl_y, long 
         {
             if (render_map_flags & SlbAtFlg_Unexplored)
             {
-                unsigned short textr_id = engine_remap_texture_blocks(stl_x + xaval + xidx, stl_y, TEXTURE_LAND_MARKED_LAND);
+                unsigned short textr_id = engine_remap_texture_blocks(stl_x + xaval + xidx, stl_y, layer_marked_land_texture(stl_x + xaval + xidx, stl_y));
                 do_a_gpoly_unlit_tr(&bec[0].cors[ncor], &bec[1].cors[ncor], &fec[1].cors[ncor], textr_id);
                 do_a_gpoly_unlit_bl(&fec[1].cors[ncor], &fec[0].cors[ncor], &bec[0].cors[ncor], textr_id);
             }
@@ -4783,13 +5055,13 @@ static void do_a_plane_of_engine_columns_isometric(long stl_x, long stl_y, long 
                 do_a_gpoly_unlit_tr(&bec[0].cors[ncor], &bec[1].cors[ncor], &fec[1].cors[ncor], textr_id);
                 do_a_gpoly_unlit_bl(&fec[1].cors[ncor], &fec[0].cors[ncor], &bec[0].cors[ncor], textr_id);
             }
-        } else if (!cube_is_abyss(game.top_cube[cur_colmn->floor_texture])) {
+        } else if (!cube_is_abyss(game.top_cube[cur_colmn->floor_texture]) && !subtile_is_layer_fall_pit(stl_x + xaval + xidx, stl_y)) {
             if ((render_map_flags & SlbAtFlg_Unexplored) == 0) {
                 unsigned short textr_id = engine_remap_top_texture_blocks(stl_x + xaval + xidx, stl_y, cur_colmn->floor_texture);
                 do_a_gpoly_gourad_tr(&bec[0].cors[0], &bec[1].cors[0], &fec[1].cors[0], textr_id, -1);
                 do_a_gpoly_gourad_bl(&fec[1].cors[0], &fec[0].cors[0], &bec[0].cors[0], textr_id, -1);
             } else {
-                unsigned short textr_id = engine_remap_texture_blocks(stl_x + xaval + xidx, stl_y, TEXTURE_LAND_MARKED_LAND);
+                unsigned short textr_id = engine_remap_texture_blocks(stl_x + xaval + xidx, stl_y, layer_marked_land_texture(stl_x + xaval + xidx, stl_y));
                 do_a_gpoly_unlit_tr(&bec[0].cors[0], &bec[1].cors[0], &fec[1].cors[0], textr_id);
                 do_a_gpoly_unlit_bl(&fec[1].cors[0], &fec[0].cors[0], &bec[0].cors[0], textr_id);
             }
@@ -6559,9 +6831,11 @@ void display_drawlist(void) // Draws isometric and 1st person view. Not frontvie
     thing_pointed_at = 0;
 
     // The bucket list is the final step in drawing something to the screen. Visuals are added to the bucket list in previous functions.
-    for (bucket_num = BUCKETS_COUNT-1; bucket_num > 0; bucket_num--)
+    for (bucket_num = (layer_pass_count + 1) * BUCKETS_COUNT - 1; bucket_num > 0; bucket_num--)
     {
-        for (item.b = buckets[bucket_num]; item.b != NULL; item.b = item.b->next)
+        if ((bucket_num % BUCKETS_COUNT) == 0)
+            continue;
+        for (item.b = bucket_items_at(bucket_num); item.b != NULL; item.b = item.b->next)
         {
             //JUSTLOG("%d",(int)item.b->kind);
             switch ( item.b->kind )
@@ -6737,14 +7011,172 @@ static void draw_view_map_plane(struct Camera *cam, long aposc, long bposc, long
     }
 }
 
+/**
+ * Fills the bucket list being built with the scene seen from the given camera position.
+ */
+static void draw_view_scene(struct Camera *cam, long x, long y, long z)
+{
+    long xcell;
+    long ycell;
+    long aposc;
+    long bposc;
+    view_alt = z;
+    if (lens_mode != 0)
+    { // 1st person
+        cells_away = max_i_can_see;
+        // Other dungeon layers are seen through pits, a storey or more up or down: look further.
+        if (map_has_layers() && (cells_away < LAYER_FIRST_PERSON_VIEW_CELLS))
+            cells_away = LAYER_FIRST_PERSON_VIEW_CELLS;
+        update_fade_limits(cells_away);
+        fade_range = (fade_max - fade_min) >> 8;
+        setup_rotate_stuff(x, y, z, fade_max, fade_min, lens, cam_map_angle, map_roll);
+    }
+    else
+    { // isometric and straight view
+        fade_min = 1000000;
+        setup_rotate_stuff(x, y, z, fade_max, fade_min, camera_zoom/pixel_size, cam_map_angle, map_roll);
+        do_perspective_rotation(x, y, z);
+        cells_away = compute_cells_away();
+        if (layer_extra_cells > 0)
+            cells_away = min(cells_away + layer_extra_cells, (long)MAX_I_CAN_SEE_OVERHEAD);
+    }
+
+    xcell = (x >> 8);
+    aposc = -(x & 0xFF);
+    bposc = (cells_away << 8) + (y & 0xFF);
+    ycell = (y >> 8) - (cells_away+1);
+    find_gamut();
+    // Not for another layer: overhead, its visible part is not within this layer's screen limits; in first
+    // person, the cut at the first wall along the camera's row is wrong there, since the camera's spot on that
+    // layer is often inside rock.
+    if (layer_extra_cells == 0)
+        fiddle_gamut(xcell, ycell + (cells_away+1));
+
+    draw_view_map_plane(cam, aposc, bposc, xcell, ycell);
+}
+
+/**
+ * A cursor-box line in first person, split into short pieces so the ones too close to the camera (or
+ * behind it), which can't be projected, are left out. Coords are relative to the camera, as in
+ * create_map_volume_box(): x across, y map-north inverted, z up.
+ */
+/**
+ * A first-person cursor-box piece, in the nearest bucket. Close up, a wall face covers a line on it in the
+ * GL renderer (a face takes one depth for its whole polygon), so the box is drawn over everything instead.
+ */
+static void create_first_person_box_segment(struct EngineCoord *start, struct EngineCoord *end, TbPixel color)
+{
+    if (!is_free_space_in_poly_pool(1))
+        return;
+    struct BucketKindSlabSelector *poly = (struct BucketKindSlabSelector *)getpoly;
+    getpoly += sizeof(struct BucketKindSlabSelector);
+    // Bucket 1: the nearest one the renderers draw (bucket 0 is skipped by the isometric/first-person loops).
+    poly->b.next = BUCKET_LIST[1];
+    poly->b.kind = QK_SlabSelector;
+    BUCKET_LIST[1] = (struct BasicQ *)poly;
+    poly->p.X = start->view_width;
+    poly->p.Y = start->view_height;
+    poly->p.U = end->view_width;
+    poly->p.V = end->view_height;
+    poly->p.S = color;
+}
+
+static void create_first_person_box_line(long x1, long y1, long z1, long x2, long y2, long z2, TbPixel color)
+{
+    const long piece = COORD_PER_STL / 8;
+    long len = max(labs(x2 - x1), max(labs(y2 - y1), labs(z2 - z1)));
+    long count = max(1, len / piece);
+    struct EngineCoord start;
+    struct EngineCoord end;
+    create_box_coords(&start, x1, y1, z1);
+    for (long i = 1; i <= count; i++)
+    {
+        create_box_coords(&end, x1 + (x2 - x1) * i / count, y1 + (y2 - y1) * i / count, z1 + (z2 - z1) * i / count);
+        if (((start.clip_flags | end.clip_flags) & 0x0100) == 0)
+            create_first_person_box_segment(&start, &end, color);
+        start = end;
+    }
+}
+
+/** In first person, outlines what the possessed digger's dig would hit, like the dig cursor box overhead. */
+static void process_first_person_dig_box(long x, long y, long z)
+{
+    if (lens_mode == 0)
+        return;
+    if (get_local_view_type() != PVT_CreatureContrl)
+        return;
+    const struct UserState *ustate = get_local_user_state();
+    const struct Thing *creatng = thing_get(ustate->controlled_thing_idx);
+    if (!thing_is_creature(creatng))
+        return;
+    const struct CreatureControl *cctrl = get_local_creature_control(creatng);
+    if (creature_control_invalid(cctrl) || !creature_instance_is_first_person_imp_work(cctrl->active_instance_id))
+        return;
+    MapSlabCoord slb_x = 0;
+    MapSlabCoord slb_y = 0;
+    int colour = SLC_GREEN;
+    const int tool_mode = first_person_tool_mode(cctrl->active_instance_id);
+    if (tool_mode != FPToolM_None)
+    {
+        // An imp tool: the floor it claims or converts, the wall it reinforces, the floor/ceiling it digs.
+        MapSubtlCoord stl_x = 0;
+        MapSubtlCoord stl_y = 0;
+        if (first_person_tool_target(creatng, tool_mode, &slb_x, &slb_y, &stl_x, &stl_y, &colour) == FPTool_None)
+            return;
+    }
+    else
+    {
+        // Dig: what instf_first_person_do_imp_task would do, in the same order.
+        if ((cctrl->dragtng_idx != 0) || (ustate->selected_fp_thing_pickup != 0))
+            return;
+        MapSubtlCoord stl_x = 0;
+        MapSubtlCoord stl_y = 0;
+        const int floor_kind = first_person_tool_target(creatng, FPToolM_Claim, &slb_x, &slb_y, &stl_x, &stl_y, &colour);
+        if ((floor_kind == FPTool_Claim) || ((floor_kind == FPTool_Convert) && !ustate->first_person_dig_claim_mode))
+        {
+            // Claims or wears down the tile it stands on.
+        }
+        else if (ustate->first_person_dig_claim_mode)
+        {
+            if (first_person_tool_target(creatng, FPToolM_Reinforce, &slb_x, &slb_y, &stl_x, &stl_y, &colour) == FPTool_None)
+                return;
+        }
+        else if (first_person_dig_target(creatng, &slb_x, &slb_y, &colour) == FPDig_None)
+        {
+            return;
+        }
+    }
+    const long xs = subtile_coord(slab_subtile(slb_x, 0), 0) - x;
+    const long xe = subtile_coord(slab_subtile(slb_x, STL_PER_SLB), 0) - x;
+    const long ys = y - subtile_coord(slab_subtile(slb_y, 0), 0);
+    const long ye = y - subtile_coord(slab_subtile(slb_y, STL_PER_SLB), 0);
+    const long floor_z = get_floor_filled_subtiles_at(slab_subtile_center(slb_x), slab_subtile_center(slb_y)) * COORD_PER_STL;
+    const long top_z = COLUMN_WALL_HEIGHT * COORD_PER_STL;
+    // A full-height box over the tile, like the room-building box: from the floor (a wall's base) to the
+    // wall top. Floor and ceiling digs get the same box over the tile they dig through.
+    const long zs = ((floor_z > 0) && (floor_z < top_z) ? floor_z : COORD_PER_STL) - z;
+    const long ze = top_z - z;
+    const TbPixel color = (TbPixel)colour;
+    const long zl[2] = {zs, ze};
+    for (int i = 0; i < 2; i++)
+    {
+        create_first_person_box_line(xs, ys, zl[i], xe, ys, zl[i], color);
+        create_first_person_box_line(xs, ye, zl[i], xe, ye, zl[i], color);
+        create_first_person_box_line(xs, ys, zl[i], xs, ye, zl[i], color);
+        create_first_person_box_line(xe, ys, zl[i], xe, ye, zl[i], color);
+    }
+    {
+        create_first_person_box_line(xs, ys, zs, xs, ys, ze, color);
+        create_first_person_box_line(xe, ys, zs, xe, ys, ze, color);
+        create_first_person_box_line(xs, ye, zs, xs, ye, ze, color);
+        create_first_person_box_line(xe, ye, zs, xe, ye, ze, color);
+    }
+}
+
 void draw_view(struct Camera *cam, unsigned char a2)
 {
     long zoom_mem;
-    long xcell;
-    long ycell;
     long i;
-    long aposc;
-    long bposc;
     SYNCDBG(9,"Starting");
     calculate_hud_scale(cam);
     camera_zoom = scale_camera_zoom_to_screen(cam->zoom);
@@ -6753,9 +7185,33 @@ void draw_view(struct Camera *cam, unsigned char a2)
     long x = cam->mappos.x.val;
     long y = cam->mappos.y.val;
     long z = cam->mappos.z.val;
+    // Dungeon layers: high up stairs in first person the eye is at the level of the layer above, so the
+    // view is drawn from there. Inside that layer's floor it stays just under it instead.
+    if ((lens_mode != 0) && map_has_layers()
+        && (layer_stairs_column_at(coord_subtile(x), coord_subtile(y)) != NULL))
+    {
+        const long storey = LAYER_STOREY_CUBES * COORD_PER_STL;
+        const int cam_layer = get_layer_at_coord(x, y);
+        MapCoord above_x = x;
+        MapCoord above_y = y;
+        if ((z > storey - 64) && (cam_layer >= 0) && translate_coord_to_layer(cam_layer, cam_layer + 1, &above_x, &above_y))
+        {
+            const TbBool open_above = subtile_is_layer_stairwell(coord_subtile(above_x), coord_subtile(above_y));
+            if (open_above || (z >= storey + COORD_PER_STL + 32))
+            {
+                x = above_x;
+                y = above_y;
+                z -= storey;
+            } else
+            {
+                z = storey - 64;
+            }
+        }
+    }
 
     getpoly = poly_pool;
     memset(buckets, 0, sizeof(buckets));
+    memset(layer_buckets, 0, sizeof(layer_buckets));
     if (map_volume_box.visible)
     {
         poly_pool_end_reserve(14);
@@ -6783,34 +7239,55 @@ void draw_view(struct Camera *cam, unsigned char a2)
     map_tilt = -cam->rotation_angle_y;
 
     frame_wibble_generate();
-    view_alt = z;
-    if (lens_mode != 0)
-    { // 1st person
-        cells_away = max_i_can_see;
-        update_fade_limits(cells_away);
-        fade_range = (fade_max - fade_min) >> 8;
-        setup_rotate_stuff(x, y, z, fade_max, fade_min, lens, cam_map_angle, map_roll);
-    }
-    else
-    { // isometric and straight view
-        fade_min = 1000000;
-        setup_rotate_stuff(x, y, z, fade_max, fade_min, camera_zoom/pixel_size, cam_map_angle, map_roll);
-        do_perspective_rotation(x, y, z);
-        cells_away = compute_cells_away();
-    }
 
-    xcell = (x >> 8);
-    aposc = -(x & 0xFF);
-    bposc = (cells_away << 8) + (y & 0xFF);
-    ycell = (y >> 8) - (cells_away+1);
-    find_gamut();
-    fiddle_gamut(xcell, ycell + (cells_away+1));
-
-    draw_view_map_plane(cam, aposc, bposc, xcell, ycell);
+    // Dungeon layers: the other layers that can be seen through pits are drawn first, each from the same
+    // spot on that layer with the camera a storey up or down per layer, farthest first. Layers above can
+    // only be seen when looking up, in first person.
+    layer_pass_count = 0;
+    render_layer = -1;
+    if (map_has_layers())
+    {
+        const int view_layer = get_layer_at_coord(x, y);
+        if (view_layer >= 0)
+        {
+            for (int dist = game.layers_count - 1; dist > 0; dist--)
+            {
+                if (view_layer - dist >= 0)
+                    layer_pass_order[layer_pass_count++] = view_layer - dist;
+                if ((lens_mode != 0) && (view_layer + dist < game.layers_count))
+                    layer_pass_order[layer_pass_count++] = view_layer + dist;
+            }
+            for (int pass = 0; pass < layer_pass_count; pass++)
+            {
+                const int layer = layer_pass_order[pass];
+                MapCoord pass_x = x;
+                MapCoord pass_y = y;
+                if (!translate_coord_to_layer(view_layer, layer, &pass_x, &pass_y))
+                    continue;
+                const long storey_h = (long)(view_layer - layer) * LAYER_STOREY_CUBES * COORD_PER_STL;
+                render_layer = layer;
+                render_bucket_list = layer_buckets[layer];
+                // Cells of a storey's height, plus a margin
+                layer_extra_cells = (labs(storey_h) / COORD_PER_STL) + 4;
+                layer_depth_bias = (lens_mode == 0) ? labs(storey_h) * 2 : 0;
+                draw_view_scene(cam, pass_x, pass_y, z + storey_h);
+            }
+            layer_extra_cells = 0;
+            layer_depth_bias = 0;
+            render_layer = view_layer;
+        }
+    }
+    render_bucket_list = buckets;
+    draw_view_scene(cam, x, y, z);
 
     if (map_volume_box.visible && should_draw_cursor_box(get_displayed_user())) {
         poly_pool_end_reserve(0);
         process_isometric_map_volume_box(x, y, z, my_player_number);
+    }
+    if (lens_mode != 0)
+    {
+        poly_pool_end_reserve(0);
+        process_first_person_dig_box(x, y, z);
     }
 
     WorldViewRenderer_DrawIsometricView();
@@ -6822,6 +7299,7 @@ static void clear_fast_bucket_list(void)
 {
     getpoly = poly_pool;
     memset(buckets, 0, sizeof(buckets));
+    memset(layer_buckets, 0, sizeof(layer_buckets));
 }
 
 static void draw_texturedquad_block(struct BucketKindTexturedQuad *txquad)
@@ -6892,9 +7370,9 @@ void display_fast_drawlist(struct Camera *cam) // Draws frontview only. Not isom
     render_problems = 0;
     thing_pointed_at = 0;
 
-    for (bucket_num = BUCKETS_COUNT-1; bucket_num >= 0; bucket_num--)
+    for (bucket_num = (layer_pass_count + 1) * BUCKETS_COUNT - 1; bucket_num >= 0; bucket_num--)
     {
-        for (item.b = buckets[bucket_num]; item.b != NULL; item.b = item.b->next)
+        for (item.b = bucket_items_at(bucket_num); item.b != NULL; item.b = item.b->next)
         {
             switch (item.b->kind)
             {
@@ -7054,9 +7532,9 @@ static void add_thing_sprite_to_polypool(struct Thing *thing, long scr_x, long s
         bckt_idx = 0;
     poly = (struct BucketKindJontySprite *)getpoly;
     getpoly += sizeof(struct BucketKindJontySprite);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_JontySprite;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
     poly->thing = thing;
     if (pixel_size > 0)
     {
@@ -7077,9 +7555,9 @@ static void add_spinning_key_to_polypool(struct Thing *thing, long scr_x, long s
       bckt_idx = 0;
     poly = (struct BucketKindJontySprite *)getpoly;
     getpoly += sizeof(struct BucketKindJontySprite);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_JontyISOSprite;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
     poly->thing = thing;
     if (pixel_size > 0)
     {
@@ -7102,9 +7580,9 @@ static void create_status_box_element(struct Thing *thing, long a2, long a3, lon
     }
     poly = (struct BucketKindCreatureStatus *)getpoly;
     getpoly += sizeof(struct BucketKindCreatureStatus);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_CreatureStatus;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
     poly->thing = thing;
     if (pixel_size > 0)
     {
@@ -7124,9 +7602,9 @@ static void add_textruredquad_to_polypool(long x, long y, long texture_idx, long
     }
     poly = (struct BucketKindTexturedQuad *)getpoly;
     getpoly += sizeof(struct BucketKindTexturedQuad);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_TextureQuad;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
 
     poly->texture_idx = texture_idx;
     poly->texture_x = x;
@@ -7152,9 +7630,9 @@ static void add_lgttextrdquad_to_polypool(long x, long y, long texture_idx, long
     }
     poly = (struct BucketKindTexturedQuad *)getpoly;
     getpoly += sizeof(struct BucketKindTexturedQuad);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_TextureQuad;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
 
     poly->texture_idx = texture_idx;
     poly->texture_x = x;
@@ -7180,9 +7658,9 @@ static void add_number_to_polypool(long x, long y, long number, long bckt_idx)
     }
     poly = (struct BucketKindFloatingGoldText *)getpoly;
     getpoly += sizeof(struct BucketKindFloatingGoldText);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_FloatingGoldText;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
     if (pixel_size > 0)
     {
       poly->x = x / pixel_size;
@@ -7201,9 +7679,9 @@ static void add_room_flag_pole_to_polypool(long x, long y, long room_idx, long b
     }
     poly = (struct BucketKindRoomFlag *)getpoly;
     getpoly += sizeof(struct BucketKindRoomFlag);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_RoomFlagBottomPole;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
     if (pixel_size > 0)
     {
       poly->x = x / pixel_size;
@@ -7222,9 +7700,9 @@ static void add_room_flag_top_to_polypool(long x, long y, long room_idx, long bc
     }
     poly = (struct BucketKindRoomFlag *)getpoly;
     getpoly += sizeof(struct BucketKindRoomFlag);
-    poly->b.next = buckets[bckt_idx];
+    poly->b.next = BUCKET_LIST[bckt_idx];
     poly->b.kind = QK_RoomFlagStatusBox;
-    buckets[bckt_idx] = (struct BasicQ *)poly;
+    BUCKET_LIST[bckt_idx] = (struct BasicQ *)poly;
     if (pixel_size > 0)
     {
       poly->x = x / pixel_size;
@@ -8810,8 +9288,8 @@ static void do_map_who_for_thing(struct Thing *thing)
         ecor.z = (map_y_pos - render_pos_z);
         ecor.y = (render_floorpos - map_z_pos); // For shadows
 
-        // Shadows
-        if (thing_is_creature(thing) && ((thing->movement_flags & TMvF_BeingSacrificed) == 0))
+        // Shadows; none for things on another layer, seen through a pit
+        if (!render_into_backdrop && thing_is_creature(thing) && ((thing->movement_flags & TMvF_BeingSacrificed) == 0))
         {
             int count;
             int i;
@@ -8830,7 +9308,7 @@ static void do_map_who_for_thing(struct Thing *thing)
         // Height movement, falling or going up steps. This is applied after shadows, because shadows are always drawn at the floor height.
         ecor.y = (render_pos_y - map_z_pos);
 
-        if (thing->class_id == TCls_Creature)
+        if ((thing->class_id == TCls_Creature) && !render_into_backdrop)
         {
             add_draw_status_box(thing, &ecor);
             // Draw path the creature is following
@@ -8922,6 +9400,12 @@ static void do_map_who_for_thing(struct Thing *thing)
     thing->last_turn_drawn = get_gameturn();
 }
 
+/**
+ * Draws the things standing on the layer below a pit subtile, at the bottom of the pit.
+ */
+/**
+ * First-person view near a pit: draws the things standing on the layer above, one storey up.
+ */
 static void do_map_who(short tnglist_idx)
 {
     long i;

@@ -41,6 +41,9 @@
 #include "local_possession.h"
 #include "creature_control.h"
 #include "bflib_datetm.h"
+#include "map_layers.h"
+#include "map_connectors.h"
+#include "gui_topmsg.h"
 
 #include <math.h>
 #include "post_inc.h"
@@ -200,6 +203,32 @@ void update_local_dungeon_view_mode(NetUserId user)
     local_state.camera.destination[CamIV_Isometric].view_mode = view_mode;
 }
 
+/** Dungeon layers: when the creature has moved to another layer (stairs, ladder, a pit), the first-person
+ * camera moves with it, so it neither sweeps across the map nor drops a storey on the way. */
+static void move_first_person_camera_to_layer_of(const struct Thing *thing, int eye_height)
+{
+    if (!map_has_layers())
+        return;
+    struct Camera *dest = &local_state.camera.destination[CamIV_FirstPerson];
+    const int cam_layer = get_layer_at_coord(dest->mappos.x.val, dest->mappos.y.val);
+    const int tng_layer = get_layer_at_coord(thing->mappos.x.val, thing->mappos.y.val);
+    if ((cam_layer < 0) || (tng_layer < 0) || (cam_layer == tng_layer))
+        return;
+    const int32_t dz = (cam_layer - tng_layer) * LAYER_STOREY_CUBES * COORD_PER_STL;
+    struct Camera *cams[3] = {&local_state.camera.current[CamIV_FirstPerson], &local_state.camera.previous[CamIV_FirstPerson], dest};
+    for (int i = 0; i < 3; i++)
+    {
+        MapCoord x = cams[i]->mappos.x.val;
+        MapCoord y = cams[i]->mappos.y.val;
+        translate_coord_to_layer(cam_layer, tng_layer, &x, &y);
+        cams[i]->mappos.x.val = x;
+        cams[i]->mappos.y.val = y;
+        cams[i]->mappos.z.val += dz;
+        // At eye height straight away: easing in from a storey away would go through the floor between.
+        cams[i]->mappos.z.val = thing->mappos.z.val + eye_height;
+    }
+}
+
 static void update_first_person_camera(struct Camera *cam, const struct UserState *ustate, TbBool snap)
 {
     if (ustate->controlled_thing_idx <= 0) {
@@ -210,6 +239,12 @@ static void update_first_person_camera(struct Camera *cam, const struct UserStat
         return;
     }
     int eye_height = get_creature_eye_height(ctrltng);
+    // Dungeon layers: while climbing between layers the view holds still, and moves to the other layer
+    // once the climb is done; following the climb would take the eye through the floor between layers.
+    if (creature_is_climbing_layers(ctrltng) && !snap)
+        return;
+    if (cam == &local_state.camera.destination[CamIV_FirstPerson])
+        move_first_person_camera_to_layer_of(ctrltng, eye_height);
     update_first_person_position(cam, ctrltng, creature_control_get_from_thing(ctrltng), eye_height);
     cam->rotation_angle_x = ctrltng->move_angle_xy;
     cam->rotation_angle_y = ctrltng->move_angle_z;
@@ -276,6 +311,50 @@ void move_local_camera_to_position(MapCoord x, MapCoord y)
     local_state.camera.move_target[0] = x;
     local_state.camera.move_target[1] = y;
     view_set_camera_move_to_position(cam->mappos.x.val, cam->mappos.y.val, x, y, &local_state.camera.move_delta[0], &local_state.camera.move_delta[1]);
+}
+
+static int get_local_active_camera_index(void);
+
+/**
+ * Moves the dungeon view up or down by delta layers, keeping the same spot on the floor.
+ * The jump is instant: gliding would cross the rock between layers.
+ * @return True if the view changed layer.
+ */
+TbBool switch_local_camera_layer(int delta)
+{
+    if (!map_has_layers() || !local_state.camera.ready || is_observer_camera_active())
+        return false;
+    if (get_local_view_type() != PVT_DungeonTop)
+        return false;
+    const int cam_idx = get_local_active_camera_index();
+    if ((cam_idx != CamIV_Isometric) && (cam_idx != CamIV_FrontView))
+        return false;
+    struct Camera *cam = &local_state.camera.destination[cam_idx];
+    int from_layer = get_layer_at_coord(cam->mappos.x.val, cam->mappos.y.val);
+    if (from_layer < 0)
+        from_layer = 0;
+    const int to_layer = from_layer + delta;
+    if ((to_layer < 0) || (to_layer >= get_map_layers_count()))
+    {
+        show_onscreen_msg(turns_per_second, "No layer %s %s", (delta > 0) ? "above" : "below", get_layer_name(from_layer));
+        return false;
+    }
+    MapCoord pos_x = cam->mappos.x.val;
+    MapCoord pos_y = cam->mappos.y.val;
+    if (!translate_coord_to_layer(from_layer, to_layer, &pos_x, &pos_y))
+        return false;
+    local_state.camera.move_cam = NULL;
+    const int dungeon_cam_indices[] = {CamIV_Isometric, CamIV_FrontView};
+    for (int i = 0; i < 2; i++)
+    {
+        struct Camera moved = local_state.camera.destination[dungeon_cam_indices[i]];
+        view_set_camera_position(&moved, pos_x, pos_y);
+        moved.velocity_x = 0;
+        moved.velocity_y = 0;
+        sync_camera_state(dungeon_cam_indices[i], &moved);
+    }
+    show_onscreen_msg(turns_per_second * 2, "Layer: %s", get_layer_name(to_layer));
+    return true;
 }
 
 static void process_local_camera_movement(struct Camera *cam)
@@ -380,7 +459,12 @@ static void update_local_first_person_camera(struct Thing *ctrltng)
     struct Camera* cam = &local_state.camera.destination[CamIV_FirstPerson];
     struct Thing *viewtng = get_local_possession_view(ctrltng);
     int eye_height = get_creature_eye_height(ctrltng);
-    update_first_person_position(cam, viewtng, get_local_creature_control(ctrltng), eye_height);
+    // Dungeon layers: while climbing between layers the view holds still (see update_first_person_camera()).
+    if (!creature_is_climbing_layers(ctrltng) && !creature_is_climbing_layers(viewtng))
+    {
+        move_first_person_camera_to_layer_of(viewtng, eye_height);
+        update_first_person_position(cam, viewtng, get_local_creature_control(ctrltng), eye_height);
+    }
 
     // A replay shows the recorded look as the creature took it.
     if (replay.load_enable)

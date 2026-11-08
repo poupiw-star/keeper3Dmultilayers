@@ -40,6 +40,7 @@ static const char * const required_sprite_zips[] = {
     "natural_features.zip",
     "time_mage.zip",
     "trapsdoors.zip",
+    "stairs_room.zip", // Dungeon layers: the Stairs room's icons
 };
 
 #define REQUIRED_SPRITE_ZIP_COUNT (sizeof(required_sprite_zips) / sizeof(required_sprite_zips[0]))

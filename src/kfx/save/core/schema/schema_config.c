@@ -713,6 +713,7 @@ SAVE_STRUCT(RoomRulesConfig, struct RoomRulesConfig,
     SAVE_FIELD(struct RoomRulesConfig, work_efficiency, SV_U16),
     SAVE_FIELD(struct RoomRulesConfig, scavenge_efficiency, SV_U16),
     SAVE_FIELD(struct RoomRulesConfig, research_efficiency, SV_U16),
+    SAVE_FIELD(struct RoomRulesConfig, first_person_train_multiplier, SV_U16),
 );
 
 SAVE_STRUCT(RulesConfig, struct RulesConfig,

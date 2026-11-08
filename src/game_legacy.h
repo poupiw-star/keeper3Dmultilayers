@@ -370,6 +370,12 @@ struct Game {
     MapSubtlCoord map_subtiles_y;
     MapSlabCoord map_tiles_x;
     MapSlabCoord map_tiles_y;
+    uint8_t layers_count; /**< Dungeon layers on this map; 0 means the whole map is one layer. */
+    struct MapLayer layers[MAX_MAP_LAYERS];
+    /** Dungeon layers: per tile, 1 if the floor under it (to the layer below) has been dug out. */
+    uint8_t layer_floor_dug[MAX_TILES_X*MAX_TILES_Y];
+    /** Dungeon layers: per tile, how much digging the floor under it has taken so far. */
+    uint16_t layer_floor_damage[MAX_TILES_X*MAX_TILES_Y];
     int32_t navigation_map_size_x;
     int32_t navigation_map_size_y;
     short around_map[AROUND_MAP_LENGTH];

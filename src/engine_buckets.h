@@ -14,6 +14,7 @@
 #define DK_ENGNBUCKETS_H
 
 #include "engine_render.h"  // BUCKETS_COUNT, struct PolyPoint, struct XYZ, struct Coord3d
+#include "map_layers.h"     // MAX_MAP_LAYERS
 
 #ifdef __cplusplus
 extern "C" {
@@ -137,6 +138,11 @@ struct BucketKindRoomFlag { // BasicQ type 17,19
 };
 
 extern struct BasicQ *buckets[BUCKETS_COUNT];
+/** Dungeon layers: the bucket list of each other layer seen through pits, drawn before buckets[]. */
+extern struct BasicQ *layer_buckets[MAX_MAP_LAYERS][BUCKETS_COUNT];
+/** Layers whose lists are drawn this frame, in drawing order (farthest first), and how many. */
+extern int layer_pass_order[MAX_MAP_LAYERS];
+extern int layer_pass_count;
 
 /******************************************************************************/
 #ifdef __cplusplus

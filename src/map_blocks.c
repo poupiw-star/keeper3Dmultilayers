@@ -43,6 +43,8 @@
 #include "thing_physics.h"
 #include "config_spritecolors.h"
 #include "lua_triggers.h"
+#include "map_layers.h"
+#include "map_connectors.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1761,8 +1763,11 @@ void place_slab_type_on_map_f(SlabKind nslab, MapSubtlCoord stl_x, MapSubtlCoord
     if (!keep_blocks_around)
       update_blocks_around_slab(slb_x,slb_y);
     else
+    {
       update_navigation_triangulation(slab_subtile(slb_x,0) - STL_PER_SLB, slab_subtile(slb_y,0) - STL_PER_SLB,
           slab_subtile(slb_x,0) + STL_PER_SLB + 2, slab_subtile(slb_y,0) + STL_PER_SLB + 2);
+      update_layer_above_slab(slb_x, slb_y);
+    }
     switch (nslab)
     {
         case SlbT_ROCK:
@@ -1861,6 +1866,15 @@ void update_floor_and_ceiling_heights_at(MapSubtlCoord stl_x, MapSubtlCoord stl_
     unsigned long k;
     mapblk = get_map_block_at(stl_x, stl_y);
     k = get_map_floor_filled_subtiles(mapblk);
+    // Dungeon layers: walkers follow the slope of stairs steps (layer_stairs_ramp_floor()), under the
+    // middle of the thing. Here a step counts only as high as it can be walked onto from the step
+    // before it, so from the side the high steps are a wall to slide along, not floor to step into.
+    const long stairs_base = layer_stairs_column_base_subtiles(get_map_column(mapblk));
+    if (stairs_base >= 0) {
+        // Rounded up: rounded down, a step could look one cube high (one a walker steps up) while it
+        // is solid higher than that, and walkers would keep stepping into it and being pushed back.
+        k = max(stairs_base, (long)((layer_stairs_entry_height(stl_x, stl_y) + COORD_PER_STL - 1) / COORD_PER_STL));
+    }
     if (k > 0) {
         height = k;
     } else {
@@ -1874,6 +1888,12 @@ void update_floor_and_ceiling_heights_at(MapSubtlCoord stl_x, MapSubtlCoord stl_
         height = 8 - k;
     } else {
         height = get_mapblk_filled_subtiles(mapblk);
+    }
+    // Over stairs between layers the stairwell goes up to the floor above, and there is no made up
+    // ceiling next to them either, as creatures walk up high there.
+    if (column_is_layer_stairs_column(get_map_column(mapblk))
+     || ((get_map_ceiling_filled_subtiles(mapblk) <= 0) && subtile_next_to_layer_stairs(stl_x, stl_y))) {
+        height = LAYER_STAIRS_CEILING_SUBTILES;
     }
     if (*ceiling_height > height) {
         *ceiling_height = height;

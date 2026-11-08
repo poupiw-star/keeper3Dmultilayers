@@ -30,6 +30,14 @@ SAVE_STRUCT(DesyncChecksums, struct DesyncChecksums,
     SAVE_FIELD(struct DesyncChecksums, game_turn, SV_U32),
 );
 
+SAVE_STRUCT(MapLayer, struct MapLayer,
+    SAVE_FIELD(struct MapLayer, x0, SV_I16),
+    SAVE_FIELD(struct MapLayer, y0, SV_I16),
+    SAVE_FIELD(struct MapLayer, x1, SV_I16),
+    SAVE_FIELD(struct MapLayer, y1, SV_I16),
+    SAVE_STRING(struct MapLayer, name),  /* plain-char */
+);
+
 SAVE_STRUCT(Game, struct Game,
     SAVE_FIELD(struct Game, continue_level_number, SV_I32),
     SAVE_FIELD(struct Game, run_after_victory, SV_BOOL8),
@@ -173,6 +181,10 @@ SAVE_STRUCT(Game, struct Game,
     SAVE_FIELD(struct Game, map_subtiles_y, SV_I32),
     SAVE_FIELD(struct Game, map_tiles_x, SV_I16),
     SAVE_FIELD(struct Game, map_tiles_y, SV_I16),
+    SAVE_FIELD(struct Game, layers_count, SV_U8),
+    SAVE_SUB_ARRAY(struct Game, layers, MapLayer),
+    SAVE_ARRAY(struct Game, layer_floor_dug, SV_U8),
+    SAVE_ARRAY(struct Game, layer_floor_damage, SV_U16),
     SAVE_DERIVED(struct Game, navigation_map_size_x, "set_map_size"),
     SAVE_DERIVED(struct Game, navigation_map_size_y, "set_map_size"),
     SAVE_DERIVED(struct Game, around_map, "set_map_size"),

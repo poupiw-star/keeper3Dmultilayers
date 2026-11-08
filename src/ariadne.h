@@ -143,6 +143,9 @@ enum NavigationStateValues {
 #define NAVMAP_OWNERSELECT_BIT  5
 #define NAVMAP_OWNERSELECT_MASK 0x3FE0
 #define NAVMAP_ABYSS            0x4000
+/** Dungeon layers: the last row of stairs steps and the row just past it; walkers can't go down from one
+ * to the other (off the end of the stairs), as that is where the layer above begins. */
+#define NAVMAP_STAIRS_END       0x8000
 
 struct Ariadne { // sizeof = 102
     /** Position where the journey stated. */
@@ -218,6 +221,8 @@ AriadneReturn creature_follow_route_to_using_gates(struct Thing *thing, struct C
 long ariadne_count_waypoints_on_creature_route_to_target_f(const struct Thing *thing,
     const struct Coord3d *srcpos, const struct Coord3d *dstpos, AriadneRouteFlags flags, const char *func_name);
 AriadneReturn ariadne_invalidate_creature_route(struct Thing *thing);
+/** For each destination, whether the creature can walk there from the source (connected navigation, no full path). */
+void ariadne_reachable_from(const struct Thing *thing, const struct Coord3d *srcpos, const struct Coord3d *dsts, int dsts_count, TbBool *reachable);
 
 TbBool navigation_points_connected(struct Coord3d *pt1, struct Coord3d *pt2);
 void path_init8_wide_f(struct Path *path, long start_x, long start_y, long end_x, long end_y, long subroute, unsigned char nav_size, const char *func_name);

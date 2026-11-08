@@ -61,6 +61,7 @@
 #include "timer.h"
 #include "packets.h"
 #include "net_game.h"
+#include "map_connectors.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -1037,7 +1038,7 @@ TbBool wp_check_map_pos_valid(struct Wander *wandr, SubtlCodedCoords stl_num)
                     dstpos.x.val = subtile_coord_center(stl_x);
                     dstpos.y.val = subtile_coord_center(stl_y);
                     dstpos.z.val = subtile_coord(1, 0);
-                    if (navigation_points_connected(&heartng->mappos, &dstpos))
+                    if (layer_points_connected(&heartng->mappos, &dstpos))
                     {
                         return true;
                     }
@@ -1058,7 +1059,7 @@ TbBool wp_check_map_pos_valid(struct Wander *wandr, SubtlCodedCoords stl_num)
                     dstpos.x.val = subtile_coord_center(stl_x);
                     dstpos.y.val = subtile_coord_center(stl_y);
                     dstpos.z.val = subtile_coord(1,0);
-                    if (navigation_points_connected(&heartng->mappos, &dstpos))
+                    if (layer_points_connected(&heartng->mappos, &dstpos))
                     {
                         return true;
                     }

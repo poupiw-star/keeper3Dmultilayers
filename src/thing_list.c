@@ -56,6 +56,7 @@
 #include "bflib_planar.h"
 #include "kfx/profiling/KfxProfilingC.h"
 #include "kfx/ai/TargetSearchProbe.h"
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3426,6 +3427,10 @@ TbBool update_thing(struct Thing *thing)
             thing->fall_acceleration = CREATURE_FALL_ACCELERATION;
             thing->abyss_fall_sound_delay = ABYSS_FALL_SOUND_DELAY;
         }
+    }
+    // Falling into a pit between dungeon layers lands on the layer below instead of the abyss.
+    if (falling && drop_thing_through_layer_pit(thing)) {
+        return true;
     }
     if (falling && (thing->mappos.z.val <= -subtile_coord(ABYSS_DEPTH, 0))) {
         if (thing_is_creature(thing))

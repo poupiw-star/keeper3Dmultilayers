@@ -415,6 +415,8 @@ struct CreatureControl {
     SpellKind active_timebomb_spell;
     short vertical_speed;
     GameTurnDelta hand_blocked_turns;
+    /** Dungeon layers: climbing between layers (LayerClimbStates). */
+    unsigned char layer_climb;
 };
 
 struct Persons {

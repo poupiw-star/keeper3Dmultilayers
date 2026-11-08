@@ -52,6 +52,8 @@
 #include "gui_soundmsgs.h"
 #include "front_simple.h"
 #include "game_legacy.h"
+#include "map_layer_dig.h"
+#include "creature_instances.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -753,7 +755,7 @@ long check_place_to_convert_excluding(struct Thing *creatng, MapSlabCoord slb_x,
                     if (claimable)
                     {
                         struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
-                        if (cctrl->active_instance_id == CrInst_FIRST_PERSON_DIG)
+                        if (creature_instance_is_first_person_imp_work(cctrl->active_instance_id))
                         {
                             return 0;
                         }
@@ -1318,7 +1320,9 @@ static int add_dig_tasks_to_imp_stack(struct Thing *anchor_imp, struct Dungeon *
             if (slab_kind_is_indestructible(slab->kind) != (filter == DigTaskStack_Gems)) {
                 continue;
             }
-            if (!block_has_diggable_side(subtile_slab(task_stl_x), subtile_slab(task_stl_y))) {
+            // Dungeon layers: floors, and walls reached through a dug floor, are worked from another layer.
+            if (((task->kind == SDDigTask_DigLayerFloor) || !block_has_diggable_side(subtile_slab(task_stl_x), subtile_slab(task_stl_y)))
+             && !layer_dig_task_has_vertical_access(dungeon->owner, task->kind, task->coords)) {
                 continue;
             }
             distance = chessboard_distance(anchor_imp->mappos.x.stl.num, anchor_imp->mappos.y.stl.num, task_stl_x, task_stl_y);
@@ -2414,6 +2418,29 @@ long check_place_to_dig_and_get_drop_position(PlayerNumber plyr_idx, SubtlCodedC
     return 0;
 }
 
+/** Dungeon layers: a place on another layer to dig the task from (above or below a dug floor). */
+static long check_place_to_dig_vertically(struct Thing *thing, unsigned char task_kind, SubtlCodedCoords stl_num, MapSubtlCoord *retstl_x, MapSubtlCoord *retstl_y)
+{
+    MapSubtlCoord stl_xs[24];
+    MapSubtlCoord stl_ys[24];
+    const int count = layer_vertical_dig_positions(thing->owner, task_kind, stl_num, stl_xs, stl_ys, 24);
+    for (int i = 0; i < count; i++)
+    {
+        if (imp_already_digging_at_excluding(thing, stl_xs[i], stl_ys[i]) || imp_will_soon_be_working_at_excluding(thing, stl_xs[i], stl_ys[i]))
+            continue;
+        struct Coord3d pos;
+        set_coords_to_subtile_center(&pos, stl_xs[i], stl_ys[i], 0);
+        pos.z.val = get_thing_height_at(thing, &pos);
+        if (creature_can_navigate_to_with_storage(thing, &pos, NavRtF_Default))
+        {
+            *retstl_x = stl_xs[i];
+            *retstl_y = stl_ys[i];
+            return 1;
+        }
+    }
+    return 0;
+}
+
 long check_place_to_dig_and_get_position(struct Thing *thing, SubtlCodedCoords stl_num, MapSubtlCoord *retstl_x, MapSubtlCoord *retstl_y)
 {
     struct SlabMap *place_slb;
@@ -2429,8 +2456,10 @@ long check_place_to_dig_and_get_position(struct Thing *thing, SubtlCodedCoords s
     SYNCDBG(18,"Starting");
     place_x = stl_num_decode_x(stl_num);
     place_y = stl_num_decode_y(stl_num);
-    if (!block_has_diggable_side(subtile_slab(place_x), subtile_slab(place_y)))
-        return 0;
+    const long task_idx = find_dig_from_task_list(thing->owner, stl_num);
+    const unsigned char task_kind = (task_idx >= 0) ? get_task_list_entry(thing->owner, task_idx)->kind : SDDigTask_None;
+    if ((task_kind == SDDigTask_DigLayerFloor) || !block_has_diggable_side(subtile_slab(place_x), subtile_slab(place_y)))
+        return check_place_to_dig_vertically(thing, task_kind, stl_num, retstl_x, retstl_y);
 
     int sorted_sides[4];
     get_sorted_small_around_side_of_slab(subtile_coord_center(place_x), subtile_coord_center(place_y), thing->mappos.x.val, thing->mappos.y.val, sorted_sides);
@@ -2475,7 +2504,7 @@ long check_place_to_dig_and_get_position(struct Thing *thing, SubtlCodedCoords s
           }
       }
     }
-    return 0;
+    return check_place_to_dig_vertically(thing, task_kind, stl_num, retstl_x, retstl_y);
 }
 
 struct Thing *check_place_to_pickup_dead_body(struct Thing *creatng, long stl_x, long stl_y)

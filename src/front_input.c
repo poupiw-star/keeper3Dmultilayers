@@ -187,6 +187,8 @@ const struct GamekeySettings game_key_settings[GAME_KEYS_COUNT] = {
     {"LVShowAllEnsigns",      GUIStr_MnuUnused,               KC_F11, KMod_CONTROL,          CBtn_NONE,                BMV_Hidden,         },       // Gkey_LVShowAllEnsigns,
     {"LVNextLevel",           GUIStr_MnuUnused,               KC_F10, KMod_CONTROL,          CBtn_NONE,                BMV_Hidden,         },       // Gkey_LVNextLevel,
     {"LVPrevLevel",           GUIStr_MnuUnused,               KC_F9,  KMod_CONTROL,          CBtn_NONE,                BMV_Hidden,         },       // Gkey_LVPrevLevel,
+    {"LayerUp",               GUIStr_MnuUnused,               KC_PGUP, KMod_CONTROL,         CBtn_NONE,                BMV_Hidden,         },       // Gkey_LayerUp,
+    {"LayerDown",             GUIStr_MnuUnused,               KC_PGDOWN, KMod_CONTROL,       CBtn_NONE,                BMV_Hidden,         },       // Gkey_LayerDown,
     //TODO these are currently fixed, as controllers can't be reconfigured yet
     {"NextInstance",          GUIStr_NextInstance,            KC_UNASSIGNED, KMod_NONE,      CBtn_RIGHTSHOULDER,       BMV_ControllerOnly, },       // Gkey_NextInstance,
     {"PrevInstance",          GUIStr_PrevInstance,            KC_UNASSIGNED, KMod_NONE,      CBtn_LEFTSHOULDER,        BMV_ControllerOnly, },       // Gkey_PrevInstance,
@@ -1438,6 +1440,16 @@ static TbBool get_dungeon_control_pausable_action_inputs(void)
     {
         toggle_hero_health_flowers();
     }
+    if (is_game_key_pressed(Gkey_LayerUp, true, false))
+    {
+        switch_local_camera_layer(1);
+        return true;
+    }
+    if (is_game_key_pressed(Gkey_LayerDown, true, false))
+    {
+        switch_local_camera_layer(-1);
+        return true;
+    }
     return false;
 }
 
@@ -2023,6 +2035,11 @@ static short get_creature_control_action_inputs(void)
             {
                 set_players_packet_action(player, PckA_SelectFPPickup, local_state.local_thing_under_hand, 0, 0, 0);
             }
+        }
+        else if (ustate->selected_fp_thing_pickup != 0)
+        {
+            // Only Dig picks things up; drop the selection when another instance is chosen.
+            set_players_packet_action(player, PckA_SelectFPPickup, 0, 0, 0, 0);
         }
         if (numkey != -1)
         {

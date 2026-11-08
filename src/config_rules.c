@@ -180,6 +180,7 @@ static const struct NamedField rules_rooms_named_fields[] = {
   {"BARRACKMAXPARTYSIZE",                 0, field_t(struct RulesConfig, rooms.barrack_max_party_size),  10,        0, GROUP_MEMBERS_COUNT,NULL,value_default, assign_default},
   {"TRAININGROOMMAXLEVEL",                0, field_t(struct RulesConfig, rooms.training_room_max_level),   0,        0,CREATURE_MAX_LEVEL+1,NULL,value_default, assign_default},
   {"TRAINEFFICIENCY",                     0, field_t(struct RulesConfig, rooms.train_efficiency), 256,        0,            USHRT_MAX,NULL,value_default, assign_default},
+  {"FIRSTPERSONTRAINMULTIPLIER",          0, field_t(struct RulesConfig, rooms.first_person_train_multiplier),   2,        0,            USHRT_MAX,NULL,value_default, assign_default},
   {"WORKEFFICIENCY",                      0, field_t(struct RulesConfig, rooms.work_efficiency), 256,        0,            USHRT_MAX,NULL,value_default, assign_default},
   {"RESEARCHEFFICIENCY",                  0, field_t(struct RulesConfig, rooms.research_efficiency), 256,        0,            USHRT_MAX,NULL,value_default, assign_default},
   {"SCAVENGEEFFICIENCY",                  0, field_t(struct RulesConfig, rooms.scavenge_efficiency), 256,        0,            USHRT_MAX,NULL,value_default, assign_default},

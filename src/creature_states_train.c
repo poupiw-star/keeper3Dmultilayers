@@ -42,6 +42,8 @@
 #include "map_utils.h"
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
+#include "bflib_planar.h"
+#include "engine_camera.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -504,6 +506,91 @@ void process_creature_in_training_room(struct Thing *thing, struct Room *room)
     }
     process_job_stress_and_going_postal(thing);
     SYNCDBG(18,"End");
+}
+
+/** How close and how square a possessed creature must face a training post for a swing to count. */
+#define FP_TRAIN_POST_REACH (5 * COORD_PER_STL / 2)
+#define FP_TRAIN_POST_ANGLE DEGREES_45
+
+/** The training post a possessed creature's swing would hit: in reach, roughly ahead, owned by it. */
+static struct Thing *first_person_training_post_ahead(struct Thing *creatng)
+{
+    struct Thing *best = INVALID_THING;
+    MapCoordDelta best_dist = FP_TRAIN_POST_REACH + 1;
+    for (long dy = -2; dy <= 2; dy++)
+    {
+        for (long dx = -2; dx <= 2; dx++)
+        {
+            const MapSubtlCoord stl_x = creatng->mappos.x.stl.num + dx;
+            const MapSubtlCoord stl_y = creatng->mappos.y.stl.num + dy;
+            if (subtile_coords_invalid(stl_x, stl_y))
+                continue;
+            struct Thing *posttng = get_object_at_subtile_of_model_and_owned_by(stl_x, stl_y, ObjMdl_TrainingPost, creatng->owner);
+            if (thing_is_invalid(posttng))
+                continue;
+            const MapCoordDelta dist = get_2d_distance(&creatng->mappos, &posttng->mappos);
+            if (dist >= best_dist)
+                continue;
+            const long angle = get_angle_xy_to(&creatng->mappos, &posttng->mappos);
+            if (get_angle_difference(angle, creatng->move_angle_xy) > FP_TRAIN_POST_ANGLE)
+                continue;
+            best = posttng;
+            best_dist = dist;
+        }
+    }
+    return best;
+}
+
+/**
+ * First person: a possessed creature's melee swing at a training post in its own Training Room trains it,
+ * as if it had trained for the turns the swing takes, at the normal rate and price.
+ * @param swing_turns Game turns one swing takes (its time plus its reset).
+ * @return true if the swing trained the creature.
+ */
+TbBool first_person_train_at_post(struct Thing *creatng, long swing_turns)
+{
+    if ((creatng->alloc_flags & TAlF_IsControlled) == 0)
+        return false;
+    if (game.conf.rules[creatng->owner].rooms.first_person_train_multiplier == 0)
+        return false;
+    struct Room *room = get_room_thing_is_on(creatng);
+    if (room_is_invalid(room) || (room->owner != creatng->owner) || !room_role_matches(room->kind, RoRoF_CrTrainExp))
+        return false;
+    if (thing_is_invalid(first_person_training_post_ahead(creatng)))
+        return false;
+    if (!creature_can_be_trained(creatng))
+        return false;
+    if (!player_can_afford_to_train_creature(creatng))
+    {
+        output_player_message(creatng->owner, SMsg_NoGoldToTrain, MESSAGE_DURATION_TREASURY);
+        return false;
+    }
+    struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
+    struct Dungeon *dungeon = get_dungeon(creatng->owner);
+    if (swing_turns < 1)
+        swing_turns = 1;
+    // Pay like a training creature does: the training cost every train_cost_frequency turns.
+    const long cost_frequency = game.conf.rules[creatng->owner].rooms.train_cost_frequency;
+    cctrl->turns_at_job += swing_turns;
+    if (cost_frequency > 0)
+    {
+        const GoldAmount training_cost = calculate_correct_creature_training_cost(creatng);
+        while (cctrl->turns_at_job >= cost_frequency)
+        {
+            cctrl->turns_at_job -= cost_frequency;
+            if (take_money_from_dungeon(creatng->owner, training_cost, 1) < 0) {
+                ERRORLOG("Cannot take %d gold from dungeon %d", (int)training_cost, (int)creatng->owner);
+            }
+            create_price_effect(&creatng->mappos, creatng->owner, training_cost);
+        }
+    }
+    const long work_value = compute_creature_work_value_for_room_role(creatng, RoRoF_CrTrainExp, room->efficiency) * swing_turns
+        * game.conf.rules[creatng->owner].rooms.first_person_train_multiplier;
+    cctrl->exp_points += work_value;
+    dungeon->total_experience_creatures_gained += work_value;
+    if (check_experience_upgrade(creatng))
+        dungeon->lvstats.creatures_trained++;
+    return true;
 }
 
 short at_training_room(struct Thing *thing)

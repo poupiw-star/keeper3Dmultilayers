@@ -37,6 +37,9 @@
 #include "player_instances.h"
 #include "frontmenu_ingame_map.h"
 #include "local_camera.h"
+#include "map_layers.h"
+#include "map_connectors.h"
+#include "map_columns.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -192,8 +195,9 @@ void shift_view_position_for_zoom(MapCoord *pos_x, MapCoord *pos_y, int32_t old_
 
     const int64_t dx = x - *pos_x;
     const int64_t dy = y - *pos_y;
-    const MapCoord new_x = *pos_x + dx * (new_zoom - old_zoom) / new_zoom;
-    const MapCoord new_y = *pos_y + dy * (new_zoom - old_zoom) / new_zoom;
+    MapCoord new_x = *pos_x + dx * (new_zoom - old_zoom) / new_zoom;
+    MapCoord new_y = *pos_y + dy * (new_zoom - old_zoom) / new_zoom;
+    clamp_view_position_to_layer(*pos_x, *pos_y, &new_x, &new_y);
     set_view_position(pos_x, pos_y, new_x, new_y);
 }
 
@@ -369,8 +373,17 @@ void update_first_person_position(struct Camera *cam, const struct Thing *thing,
                           (get_mapblk_filled_subtiles(mapblk3) * COORD_PER_STL) +
                           (get_mapblk_filled_subtiles(mapblk4) * COORD_PER_STL) )/4;
 
-        if ( cam->mappos.z.val > ceiling - 64 )
+        // Climbing between layers or on stairs, the eye goes up the stairwell, past the usual ceiling.
+        const TbBool layer_climb = (cctrl->layer_climb == LClS_Up) || (cctrl->layer_climb == LClS_Down)
+            || (layer_stairs_column_at(thing->mappos.x.stl.num, thing->mappos.y.stl.num) != NULL);
+        if (!layer_climb && ( cam->mappos.z.val > ceiling - 64 ))
             cam->mappos.z.val = ceiling - 64;
+        // ...but while climbing it stays under the floor of the layer above, or that floor would be seen
+        // through from inside; the view moves to the upper layer once the climb is done. On stairs the eye
+        // goes on up, and the view is drawn from the layer above once it is over that floor (draw_view()).
+        if ((cctrl->layer_climb == LClS_Up || cctrl->layer_climb == LClS_Down)
+            && (cam->mappos.z.val > LAYER_STOREY_CUBES * COORD_PER_STL - 192))
+            cam->mappos.z.val = LAYER_STOREY_CUBES * COORD_PER_STL - 192;
 
     }
     else
@@ -404,16 +417,18 @@ void update_first_person_position(struct Camera *cam, const struct Thing *thing,
 // Positive distance moves rightwards
 static void view_move_camera_x(struct Camera *cam, int32_t distance)
 {
-    const MapCoord pos_x = move_coord_with_angle_x(cam->mappos.x.val, distance, cam->rotation_angle_x + DEGREES_90);
-    const MapCoord pos_y = move_coord_with_angle_y(cam->mappos.y.val, distance, cam->rotation_angle_x + DEGREES_90);
+    MapCoord pos_x = move_coord_with_angle_x(cam->mappos.x.val, distance, cam->rotation_angle_x + DEGREES_90);
+    MapCoord pos_y = move_coord_with_angle_y(cam->mappos.y.val, distance, cam->rotation_angle_x + DEGREES_90);
+    clamp_view_position_to_layer(cam->mappos.x.val, cam->mappos.y.val, &pos_x, &pos_y);
     view_set_camera_position(cam, pos_x, pos_y);
 }
 
 // Positive distance moves downwards
 static void view_move_camera_y(struct Camera *cam, int32_t distance)
 {
-    const MapCoord pos_x = move_coord_with_angle_x(cam->mappos.x.val, distance, cam->rotation_angle_x + DEGREES_180);
-    const MapCoord pos_y = move_coord_with_angle_y(cam->mappos.y.val, distance, cam->rotation_angle_x + DEGREES_180);
+    MapCoord pos_x = move_coord_with_angle_x(cam->mappos.x.val, distance, cam->rotation_angle_x + DEGREES_180);
+    MapCoord pos_y = move_coord_with_angle_y(cam->mappos.y.val, distance, cam->rotation_angle_x + DEGREES_180);
+    clamp_view_position_to_layer(cam->mappos.x.val, cam->mappos.y.val, &pos_x, &pos_y);
     view_set_camera_position(cam, pos_x, pos_y);
 }
 
@@ -436,8 +451,9 @@ void view_process_camera_velocity(struct Camera *cam)
             const int64_t cos = LbCosL(cam->velocity_rotation);
             const MapCoordDelta x1 = (x0 * cos - y0 * sin) >> 16;
             const MapCoordDelta y1 = (x0 * sin + y0 * cos) >> 16;
-            const MapCoord new_x = (MapCoord)cam->rotation_pivot.x.val + x1;
-            const MapCoord new_y = (MapCoord)cam->rotation_pivot.y.val + y1;
+            MapCoord new_x = (MapCoord)cam->rotation_pivot.x.val + x1;
+            MapCoord new_y = (MapCoord)cam->rotation_pivot.y.val + y1;
+            clamp_view_position_to_layer(cam->mappos.x.val, cam->mappos.y.val, &new_x, &new_y);
             view_set_camera_position(cam, new_x, new_y);
         }
     }

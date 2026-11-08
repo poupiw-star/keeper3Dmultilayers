@@ -106,6 +106,7 @@
 
 #include "keeperfx.hpp"
 #include "kfx/profiling/KfxProfilingC.h"
+#include "map_connectors.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2857,6 +2858,8 @@ TbBool get_creature_move_position(struct Thing *thing, struct Coord3d *nxpos, Tb
     nxpos->x.val = clamp(velo_x, -MAX_VELOCITY, MAX_VELOCITY) + thing->mappos.x.val;
     nxpos->y.val = clamp(velo_y, -MAX_VELOCITY, MAX_VELOCITY) + thing->mappos.y.val;
     nxpos->z.val = clamp(velo_z, -MAX_VELOCITY, MAX_VELOCITY) + thing->mappos.z.val;
+    // Dungeon layers: nobody leaves stairs over the end of the top step; the layer above begins there.
+    layer_stairs_keep_on_top(thing, nxpos);
     if (!thing_in_wall_at(thing, nxpos) || creature_can_pass_through_wall_at(thing, nxpos)) {
         return true;
     }
@@ -6584,16 +6587,21 @@ TngUpdateRet update_creature(struct Thing *thing)
         }
     }
 
-    if (update_creature_movements(thing))
+    const TbBool moved = update_creature_movements(thing);
+    // Dungeon layers: a creature climbing between layers is moved by the climb instead of walking.
+    if (!update_creature_layer_climb(thing))
     {
-        SYNCDBG(19,"The %s index %d acceleration is (%d,%d,%d)",thing_model_name(thing),
-            (int)thing->index,(int)cctrl->moveaccel.x.val,(int)cctrl->moveaccel.y.val,(int)cctrl->moveaccel.z.val);
-        block_voluntary_move_onto_toxic_terrain(thing, cctrl);
-        thing->velocity.x.val += cctrl->moveaccel.x.val;
-        thing->velocity.y.val += cctrl->moveaccel.y.val;
-        thing->velocity.z.val += cctrl->moveaccel.z.val;
+        if (moved)
+        {
+            SYNCDBG(19,"The %s index %d acceleration is (%d,%d,%d)",thing_model_name(thing),
+                (int)thing->index,(int)cctrl->moveaccel.x.val,(int)cctrl->moveaccel.y.val,(int)cctrl->moveaccel.z.val);
+            block_voluntary_move_onto_toxic_terrain(thing, cctrl);
+            thing->velocity.x.val += cctrl->moveaccel.x.val;
+            thing->velocity.y.val += cctrl->moveaccel.y.val;
+            thing->velocity.z.val += cctrl->moveaccel.z.val;
+        }
+        move_creature(thing);
     }
-    move_creature(thing);
     if (flag_is_set(thing->alloc_flags, TAlF_IsControlled))
     {
         slow_down_controlled_creature(cctrl);

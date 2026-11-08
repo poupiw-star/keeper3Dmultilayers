@@ -106,7 +106,8 @@ const struct NamedCommand cmpgn_map_commands[] = {
   {"MAPSIZE",            13},
   {"MAP_FORMAT_VERSION", 14},
   {"INTRO_DESC_ID",     15},
-  {"DESCRIPTION_GEO",    16},  
+  {"DESCRIPTION_GEO",    16},
+  {"LAYER",              17},
   {NULL,                  0},
   };
 
@@ -197,7 +198,9 @@ void clear_level_info(struct LevelInformation *lvinfo)
   lvinfo->state = LvSt_Hidden;
   lvinfo->location = LvLc_VarLevels;
   lvinfo->mapsize_x = DEFAULT_MAP_SIZE;
-  lvinfo->mapsize_y = DEFAULT_MAP_SIZE;  
+  lvinfo->mapsize_y = DEFAULT_MAP_SIZE;
+  lvinfo->layers_count = 0;
+  memset(lvinfo->layers, 0, sizeof(lvinfo->layers));
   KfxFree(lvinfo->level_description_geo);
   lvinfo->level_description_geo = NULL;
 }
@@ -1142,6 +1145,9 @@ short parse_campaign_map_block(long lvnum, unsigned long lvoptions, char *buf, l
                 CONFWRNLOG("Couldn't read \"%s\" parameter in [%s] block of '%s' file.",
                     COMMAND_TEXT(cmd_num),block_buf,config_textname);
             }
+            break;
+        case 17: // LAYER
+            parse_level_layer_line(lvinfo, buf, &pos, len, config_textname);
             break;
         case ccr_comment:
             break;

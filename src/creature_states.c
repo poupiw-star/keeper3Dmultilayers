@@ -85,6 +85,7 @@
 
 #include "keeperfx.hpp"
 #include "kfx/ai/TargetSearchProbe.h"
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -4628,6 +4629,20 @@ static TbBool wander_point_get_random_pos(const struct Wander *wandr, const stru
           MapSubtlCoord stl_x = wandr->points[irnd].stl_x;
           MapSubtlCoord stl_y = wandr->points[irnd].stl_y;
           MapSubtlCoord dist = chessboard_distance(stl_x, stl_y, prevpos->x.stl.num, prevpos->y.stl.num);
+          // Dungeon layers: a point on another layer is as far as the same spot on this one, plus a few
+          // slabs for each storey to climb, so idle creatures wander between layers too.
+          const int point_layer = get_layer_at_subtile(stl_x, stl_y);
+          const int own_layer = get_layer_at_subtile(prevpos->x.stl.num, prevpos->y.stl.num);
+          if ((point_layer >= 0) && (own_layer >= 0) && (point_layer != own_layer))
+          {
+              MapCoord local_x = subtile_coord_center(stl_x);
+              MapCoord local_y = subtile_coord_center(stl_y);
+              if (translate_coord_to_layer(point_layer, own_layer, &local_x, &local_y))
+              {
+                  dist = chessboard_distance(coord_subtile(local_x), coord_subtile(local_y), prevpos->x.stl.num, prevpos->y.stl.num)
+                      + 3 * STL_PER_SLB * abs(point_layer - own_layer);
+              }
+          }
           // Move at least 2 slabs, and prefer distance around 7 slabs
           // If previously selected selected_dist is too low, allow any place
           if (((dist > 6) && (abs(dist-21) < abs(selected_dist-21))) || (selected_dist <= 6))

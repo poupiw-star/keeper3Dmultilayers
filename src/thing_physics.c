@@ -38,6 +38,8 @@
 #include "map_blocks.h"
 #include "map_utils.h"
 #include "game_legacy.h"
+#include "map_connectors.h"
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -582,6 +584,15 @@ static int thing_collision_radius(const struct Thing *thing)
     return thing->clipbox_size_xy / 2;
 }
 
+/** Dungeon layers: on stairs the floor follows the slope of the steps under the middle of a thing. */
+static MapCoord stairs_floor_under(const struct Coord3d *pos, MapCoord floor_z)
+{
+    MapCoord ramp_z;
+    if (layer_stairs_ramp_floor(pos->x.val, pos->y.val, &ramp_z) && (ramp_z > floor_z))
+        return ramp_z;
+    return floor_z;
+}
+
 long get_thing_height_at(const struct Thing *thing, const struct Coord3d *pos)
 {
     SYNCDBG(18,"Starting");
@@ -602,7 +613,7 @@ long get_thing_height_at_with_radius(const struct Thing *thing, const struct Coo
     get_min_floor_and_ceiling_heights_for_rect(coord_subtile(pos_x_beg), coord_subtile(pos_y_beg),
         coord_subtile(pos_x_end), coord_subtile(pos_y_end), &floor_height, &ceiling_height);
     MapCoord pos_z_ceiling = subtile_coord(ceiling_height, 0);
-    MapCoord pos_z_floor = subtile_coord(floor_height, 0);
+    MapCoord pos_z_floor = stairs_floor_under(pos, subtile_coord(floor_height, 0));
     if (pos_z_floor + thing->clipbox_size_z >= pos_z_ceiling)
         return  pos->z.val;
     else
@@ -616,7 +627,11 @@ TbBool map_is_solid_at_height(MapSubtlCoord stl_x, MapSubtlCoord stl_y, MapCoord
     {
         return true;
     }
-    if (get_map_floor_height(mapblk) > height_beg)
+    MapCoord floor_z = get_map_floor_height(mapblk);
+    // Dungeon layers: stairs steps are walked up as a ramp, from the step before.
+    if (column_is_layer_stairs_column(get_map_column(mapblk)))
+        floor_z = layer_stairs_entry_height(stl_x, stl_y);
+    if (floor_z > height_beg)
     {
         return true;
     }
@@ -723,7 +738,7 @@ long get_floor_height_under_thing_at(const struct Thing *thing, const struct Coo
     MapSubtlCoord ceiling_height;
     get_min_floor_and_ceiling_heights_for_rect(coord_subtile(pos_x_beg), coord_subtile(pos_y_beg),
         coord_subtile(pos_x_end), coord_subtile(pos_y_end), &floor_height, &ceiling_height);
-    return subtile_coord(floor_height,0);
+    return stairs_floor_under(pos, subtile_coord(floor_height,0));
 }
 
 long get_ceiling_height_above_thing_at(const struct Thing *thing, const struct Coord3d *pos)
@@ -774,7 +789,7 @@ void get_floor_and_ceiling_height_under_thing_at(const struct Thing *thing,
     MapSubtlCoord ceiling_height;
     get_min_floor_and_ceiling_heights_for_rect(coord_subtile(pos_x_beg), coord_subtile(pos_y_beg),
         coord_subtile(pos_x_end), coord_subtile(pos_y_end), &floor_height, &ceiling_height);
-    *floor_height_cor = subtile_coord(floor_height,0);
+    *floor_height_cor = stairs_floor_under(pos, subtile_coord(floor_height,0));
     *ceiling_height_cor = subtile_coord(ceiling_height,0);
 }
 

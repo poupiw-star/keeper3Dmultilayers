@@ -82,3 +82,33 @@ function AddHeartHealth(player,healthdelta,warn_on_damage) end
 ---@return integer val_z
 ---@nodiscard
 function GetFloorHeight(stl_x,stl_y) end
+
+---Number of dungeon layers on the map; 1 when the map has no LAYER lines
+---@return integer count
+---@nodiscard
+function GetLayerCount() end
+
+---Dungeon layer at a subtile: 0 is Ground, 1 is +1 and so on; nil for rock between layers
+---@param stl_x integer
+---@param stl_y integer
+---@return integer|nil layer
+---@nodiscard
+function GetLayerAt(stl_x,stl_y) end
+
+---Display name of a dungeon layer
+---@param layer integer 0 is Ground
+---@return string name
+---@nodiscard
+function GetLayerName(layer) end
+
+---Digs out the floor under a tile on a layer above Ground at once, opening it to the tile below
+---@param slab_x integer
+---@param slab_y integer
+---@return boolean dug false if there was no floor to dig (Ground, or already dug)
+function DigLayerFloor(slab_x,slab_y) end
+
+---Moves a thing to the same spot on another dungeon layer
+---@param thing Thing
+---@param layer integer 0 is Ground
+---@return boolean moved
+function MoveThingToLayer(thing,layer) end

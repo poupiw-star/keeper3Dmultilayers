@@ -56,6 +56,8 @@
 #include "config_spritecolors.h"
 #include "lua_triggers.h"
 #include "lua_cfg_funcs.h"
+#include "map_connectors.h"
+#include "map_layer_dig.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3265,6 +3267,10 @@ void replace_room_slab(struct Room *room, MapSlabCoord slb_x, MapSlabCoord slb_y
     {
         struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
         int slbkind = slab_kind_from_wlb_type(slabmap_wlb(slb));
+        if ((slbkind < 0) && layer_floor_is_dug(slb_x, slb_y)) {
+            // Dungeon layers: a bridge over a dug-out floor; the hole is still there under it.
+            slbkind = SlbT_PATH;
+        } else
         if (slbkind < 0) {
             ERRORLOG("WLB flags seem damaged for slab (%ld,%ld).",(long)slb_x,(long)slb_y);
             slbkind = SlbT_PATH;
@@ -3327,6 +3333,8 @@ struct Room *place_room(PlayerNumber owner, RoomKind rkind, MapSubtlCoord stl_x,
         dungeon->lvstats.rooms_constructed++;
     }
     panel_map_update(stl_x, stl_y, STL_PER_SLB, STL_PER_SLB);
+    // Dungeon layers: stairs and elevators get their other end on the next layer.
+    layer_connector_room_placed(owner, room->kind, slb_x, slb_y);
     return room;
 }
 
@@ -3887,6 +3895,7 @@ long claim_room(struct Room *room, struct Thing *claimtng)
         EvKind_RoomTakenOver, claimtng->owner, room->kind);
     room = merge_adjacent_rooms_of_same_kind(room);
     do_room_recalculation(room);
+    layer_connector_room_owner_changed(room);
     thing_play_sample(claimtng, snd_room_claim, NORMAL_PITCH, 0, 3, 0, 4, FULL_LOUDNESS);
     output_room_takeover_message(room, oldowner, claimtng->owner);
     return 1;
@@ -3920,6 +3929,7 @@ long claim_enemy_room(struct Room *room, struct Thing *claimtng)
         EvKind_RoomTakenOver, claimtng->owner, room->kind);
     room = merge_adjacent_rooms_of_same_kind(room);
     do_room_recalculation(room);
+    layer_connector_room_owner_changed(room);
     output_room_takeover_message(room, oldowner, claimtng->owner);
     return 1;
 }
@@ -3954,6 +3964,7 @@ long take_over_room(struct Room* room, PlayerNumber newowner)
         event_create_event_or_update_nearby_existing_event(ccor_x, ccor_y, EvKind_RoomLost, oldowner, room->kind);
         room = merge_adjacent_rooms_of_same_kind(room);
         do_room_recalculation(room);
+        layer_connector_room_owner_changed(room);
         return 1;
     }
     else

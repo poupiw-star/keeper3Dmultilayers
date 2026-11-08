@@ -30,6 +30,7 @@
 #include "game_legacy.h"
 #include "creature_states.h"
 #include "map_data.h"
+#include "map_layers.h"
 #include "post_inc.h"
 #include "lua_triggers.h"
 
@@ -295,6 +296,21 @@ TbBool is_valid_hug_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumb
     return true;
 }
 
+/** Dungeon layers: a dug-out floor between two layers is empty ground; only a bridge can go over it, like over an abyss. */
+TbBool slab_is_bridgeable_at(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
+    return slab_kind_is_bridgeable(slb->kind) || slab_is_layer_pit(slb_x, slb_y);
+}
+
+TbBool room_can_build_on_bridge_slab_at(RoomKind rkind, MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
+    if (slab_is_layer_pit(slb_x, slb_y))
+        return room_role_matches(rkind, RoRoF_PassAbyss);
+    return room_can_build_on_bridge_slab(rkind, slb->kind);
+}
+
 TbBool can_build_room_at_slab(PlayerNumber plyr_idx, RoomKind rkind,
     MapSlabCoord slb_x, MapSlabCoord slb_y)
 {
@@ -312,7 +328,10 @@ TbBool can_build_room_at_slab(PlayerNumber plyr_idx, RoomKind rkind,
         return false;
     }
     if (room_role_matches(rkind,RoRoF_PassWater|RoRoF_PassLava|RoRoF_PassAbyss)) {
-        return room_can_build_on_bridge_slab(rkind, slb->kind) && slab_by_players_land(plyr_idx, slb_x, slb_y);
+        return room_can_build_on_bridge_slab_at(rkind, slb_x, slb_y) && slab_by_players_land(plyr_idx, slb_x, slb_y);
+    }
+    if (slab_is_layer_pit(slb_x, slb_y)) {
+        return false;
     }
     if (slabmap_owner(slb) != plyr_idx) {
         return false;
@@ -325,11 +344,11 @@ TbBool can_build_room_at_slab_fast(PlayerNumber plyr_idx, RoomKind rkind, MapSla
     struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
     if (room_role_matches(rkind,RoRoF_PassWater|RoRoF_PassLava|RoRoF_PassAbyss))
     {
-        return room_can_build_on_bridge_slab(rkind, slb->kind) && slab_by_players_land(plyr_idx, slb_x, slb_y);
+        return room_can_build_on_bridge_slab_at(rkind, slb_x, slb_y) && slab_by_players_land(plyr_idx, slb_x, slb_y);
     }
     else
     {
-        if (slb->kind == SlbT_CLAIMED)
+        if ((slb->kind == SlbT_CLAIMED) && !slab_is_layer_pit(slb_x, slb_y))
         {
             return (slabmap_owner(slb) == plyr_idx);
         }
@@ -355,7 +374,11 @@ int check_room_at_slab_loose(PlayerNumber plyr_idx, RoomKind rkind, MapSlabCoord
     int result = 0;
     if (room_role_matches(rkind,RoRoF_PassWater|RoRoF_PassLava|RoRoF_PassAbyss))
     {
-        result = room_can_build_on_bridge_slab(rkind, slb->kind) && slab_by_players_land(plyr_idx, slb_x, slb_y);
+        result = room_can_build_on_bridge_slab_at(rkind, slb_x, slb_y) && slab_by_players_land(plyr_idx, slb_x, slb_y);
+    }
+    else if (slab_is_layer_pit(slb_x, slb_y))
+    {
+        result = 0;
     }
     else
     {
@@ -591,6 +614,7 @@ void update_blocks_around_slab(MapSlabCoord slb_x, MapSlabCoord slb_y)
     if (sx <= 0)
         sx = 0;
     update_blocks_in_area(sx, sy, ex, ey);
+    update_layer_above_slab(slb_x, slb_y);
 }
 
 void update_map_collide(SlabKind slbkind, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
@@ -822,8 +846,7 @@ TbBool players_land_by_bridgeable_slab(PlayerNumber plyr_idx, MapSlabCoord slb_x
         {
             MapSlabCoord aslb_x = slb_x + small_around[n].delta_x;
             MapSlabCoord aslb_y = slb_y + small_around[n].delta_y;
-            struct SlabMap* aslb = get_slabmap_block(aslb_x, aslb_y);
-            if (slab_kind_is_bridgeable(aslb->kind))
+            if (slab_is_bridgeable_at(aslb_x, aslb_y))
             {
                 return true;
             }

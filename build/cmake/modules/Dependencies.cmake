@@ -200,6 +200,59 @@ else()
     pkg_check_modules(MINIZIP    REQUIRED IMPORTED_TARGET minizip)
     pkg_check_modules(ZLIB       REQUIRED IMPORTED_TARGET zlib)
 
+  if(APPLE)
+    # No macOS builds in kfx-deps: compile astronomy, centijson and ENet6 from
+    # their upstream source (the kfx-deps patches for them are Windows-only),
+    # and take libcurl from Homebrew (keg-only; Platforms.cmake adds its
+    # pkg-config dir). Same upstream projects as the kfx-deps prebuilts.
+    set(ASTRONOMY_VER 2.1.19)
+    set(CENTIJSON_VER 0.0.1)
+    set(ENET6_VER     6.1.3)
+    kfx_fetch(centijson "https://github.com/mity/centijson/archive/refs/tags/v${CENTIJSON_VER}.tar.gz")
+    kfx_fetch(enet6     "https://github.com/SirLynix/enet6/archive/refs/tags/v${ENET6_VER}.tar.gz")
+    # The astronomy repo tarball is ~30 MB of other languages; take just the C library.
+    set(_astro "${D}/astronomy-${ASTRONOMY_VER}")
+    foreach(_f astronomy.c astronomy.h)
+        if(NOT EXISTS "${_astro}/${_f}")
+            message(STATUS "Downloading dep: astronomy/${_f}")
+            file(DOWNLOAD
+                "https://raw.githubusercontent.com/cosinekitty/astronomy/v${ASTRONOMY_VER}/source/c/${_f}"
+                "${_astro}/${_f}.part" STATUS _st)
+            list(GET _st 0 _code)
+            if(NOT _code EQUAL 0)
+                message(FATAL_ERROR "Failed to download astronomy/${_f}: ${_st}")
+            endif()
+            file(RENAME "${_astro}/${_f}.part" "${_astro}/${_f}")
+        endif()
+    endforeach()
+    set(_cjson "${D}/centijson/centijson-${CENTIJSON_VER}/src")
+    set(_enet  "${D}/enet6/enet6-${ENET6_VER}")
+
+    add_library(astronomy_static STATIC "${_astro}/astronomy.c")
+    target_include_directories(astronomy_static PUBLIC "${_astro}")
+
+    add_library(centijson_static STATIC
+        "${_cjson}/json.c" "${_cjson}/json-dom.c" "${_cjson}/json-ptr.c" "${_cjson}/value.c")
+    target_include_directories(centijson_static PUBLIC "${_cjson}")
+
+    file(GLOB _enet_src "${_enet}/src/*.c")
+    add_library(enet6_static STATIC ${_enet_src})
+    target_include_directories(enet6_static PUBLIC "${_enet}/include")
+    # What ENet6's own CMake feature checks find on macOS (no gethostby*_r).
+    target_compile_definitions(enet6_static PRIVATE
+        HAS_FCNTL=1 HAS_POLL=1 HAS_GETADDRINFO=1 HAS_GETNAMEINFO=1
+        HAS_INET_PTON=1 HAS_INET_NTOP=1 HAS_MSGHDR_FLAGS=1 HAS_OFFSETOF=1
+        HAS_SOCKLEN_T=1)
+
+    # net_matchmaking.c needs <curl/websockets.h>; Apple's system libcurl may
+    # lack WebSocket support, Homebrew's has it.
+    pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
+    add_library(curl_static INTERFACE)
+    target_link_libraries(curl_static INTERFACE PkgConfig::CURL)
+
+    # macOS keeps iconv (bflib_text.c) in its own library, not in libc.
+    find_package(Iconv REQUIRED)
+  else()
     # Not reliably packaged; use the prebuilt lin64 static libs (as linux.mk does).
     kfx_fetch(astronomy "${KFX_DEPS_BASE}/20250418/astronomy-lin64.tar.gz")
     kfx_fetch(centijson "${KFX_DEPS_BASE}/20250418/centijson-lin64.tar.gz")
@@ -211,6 +264,7 @@ else()
     kfx_imported(enet6_static     "${D}/enet6/libenet6.a"         "${D}/enet6/include")
     kfx_imported(curl_static      "${D}/libcurl/lib/libcurl.a"    "${D}/libcurl/include")
     target_link_libraries(curl_static INTERFACE ssl crypto zstd)
+  endif()
 
     add_library(centitoml OBJECT "${KFX_CENTITOML_SRC}/toml_api.c")
     target_link_libraries(centitoml PUBLIC centijson_static)
@@ -265,6 +319,9 @@ function(kfx_link_dependencies TARGET)
             astronomy_static centijson_static enet6_static curl_static
             centitoml
             miniupnpc natpmp dl)
+        if(APPLE)
+            target_link_libraries(${TARGET} PRIVATE Iconv::Iconv)
+        endif()
     endif()
     target_link_libraries(${TARGET} PRIVATE OpenGL::GL glad)
 endfunction()

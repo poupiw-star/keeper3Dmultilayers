@@ -67,6 +67,8 @@
 #include "frontmenu_ingame_opts.h"
 #include "frontmenu_ingame_map.h"
 #include "frontend.h"
+#include "local_camera.h"
+#include "map_layers.h"
 #include "front_input.h"
 #include "game_legacy.h"
 #include "local_camera.h"
@@ -378,6 +380,21 @@ void gui_area_autopilot_button(struct GuiButton *gbtn)
           spr_idx += 1;
         draw_gui_panel_sprite_left(gbtn->scr_pos_x, gbtn->scr_pos_y, ps_units_per_px, spr_idx);
     }
+}
+
+/** Click on a layer button: content.lval is +1 for up, -1 for down. */
+void gui_switch_layer(struct GuiButton *gbtn)
+{
+    switch_local_camera_layer((int)gbtn->content.lval);
+}
+
+/** Layer buttons only show on maps with two or more dungeon layers. */
+void maintain_layer_button(struct GuiButton *gbtn)
+{
+    if (map_has_layers())
+        gbtn->flags |= (LbBtnF_Visible | LbBtnF_Enabled);
+    else
+        gbtn->flags &= ~(LbBtnF_Visible | LbBtnF_Enabled);
 }
 
 void maintain_turn_on_autopilot(struct GuiButton *gbtn)

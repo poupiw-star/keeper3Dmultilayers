@@ -51,6 +51,7 @@ int32_t get_local_possession_start_zoom(NetUserId user);
 void carry_local_dungeon_position(NetUserId user, TbBool from_front_view);
 void look_local_first_person_camera(struct Thing *ctrltng, int32_t turn_x, int32_t turn_y, int32_t *yaw, int32_t *pitch);
 void move_local_camera_to_position(MapCoord x, MapCoord y);
+TbBool switch_local_camera_layer(int delta);
 void update_local_view_prediction(const struct Packet *pckt);
 TbBool local_camera_shows_user(NetUserId user);
 unsigned char get_local_view_type(void);

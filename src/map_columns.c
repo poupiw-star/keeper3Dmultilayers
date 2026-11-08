@@ -23,6 +23,9 @@
 #include "config_terrain.h"
 #include "slab_data.h"
 #include "game_legacy.h"
+#include "map_layers.h"
+#include "map_connectors.h"
+#include "config_cubes.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -45,10 +48,47 @@ struct Column *get_column_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
   return &game.columns_data[get_mapblk_column_index(mapblk)];
 }
 
+/** Column used for pit subtiles between dungeon layers: no cubes, so there is no floor to stand on.
+ * It is a private copy, so code that writes through get_map_column() never alters shared column data. */
+static struct Column layer_pit_column;
+
 struct Column *get_map_column(const struct Map *mapblk)
 {
   if (map_block_invalid(mapblk))
     return INVALID_COLUMN;
+  if (game.layers_count > 1)
+  {
+      const SubtlCodedCoords stl_num = (SubtlCodedCoords)(mapblk - game.map);
+      const MapSubtlCoord stl_x = stl_num_decode_x(stl_num);
+      const MapSubtlCoord stl_y = stl_num_decode_y(stl_num);
+      if (subtile_is_layer_pit(stl_x, stl_y))
+      {
+          memset(&layer_pit_column, 0, sizeof(layer_pit_column));
+          // A dug floor over a wall below isn't a way down: it is the floor's thickness taken away, with
+          // the top of the wall showing at its bottom, one cube down.
+          MapSubtlCoord below_x = stl_x;
+          MapSubtlCoord below_y = stl_y;
+          if (!subtile_is_layer_fall_pit(stl_x, stl_y) && get_subtile_layers_below(&below_x, &below_y, 1))
+          {
+              const struct Map *below_blk = get_map_block_at(below_x, below_y);
+              if (!map_block_invalid(below_blk))
+              {
+                  // Show the top face of the wall's highest cube, so gold or gems below show through as they are.
+                  const struct Column *below_col = &game.columns_data[get_mapblk_column_index(below_blk)];
+                  const long below_h = get_column_floor_filled_subtiles(below_col);
+                  if ((below_h > 0) && (below_col->cubes[below_h - 1] != 0))
+                      layer_pit_column.floor_texture = get_cube_model_stats(below_col->cubes[below_h - 1])->texture_id[4];
+                  else
+                      layer_pit_column.floor_texture = below_col->floor_texture;
+              }
+          }
+          return &layer_pit_column;
+      }
+      // Stairs between layers: each step is a taller copy of the room floor.
+      struct Column *stairs_col = layer_stairs_column_at(stl_x, stl_y);
+      if (stairs_col != NULL)
+          return stairs_col;
+  }
   return &game.columns_data[get_mapblk_column_index(mapblk)];
 }
 
@@ -58,6 +98,8 @@ TbBool column_invalid(const struct Column *colmn)
     return true;
   if (colmn == INVALID_COLUMN)
     return true;
+  if ((colmn == &layer_pit_column) || column_is_layer_stairs_column(colmn))
+    return false;
   return (colmn <= &game.columns_data[0]) || (colmn > &game.columns_data[COLUMNS_COUNT-1]) || (colmn == NULL);
 }
 
@@ -91,6 +133,9 @@ long get_map_floor_filled_subtiles(const struct Map *mapblk)
 long get_floor_filled_subtiles_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
     const struct Column *col;
+    const long stairs_nav = layer_stairs_nav_floor_subtiles(stl_x, stl_y);
+    if (stairs_nav >= 0)
+        return stairs_nav;
     col = get_column_at(stl_x, stl_y);
     if (column_invalid(col))
         return 0;
@@ -240,10 +285,17 @@ MapCoord get_map_ceiling_height(const struct Map *mapblk)
     long i;
     long cubes_height;
     colmn = get_map_column(mapblk);
+    // Over stairs between layers there is no ceiling: the stairwell goes up to the floor above.
+    if (column_is_layer_stairs_column(colmn))
+        return LAYER_STAIRS_CEILING_SUBTILES * COORD_PER_STL;
     i = get_column_ceiling_filled_subtiles(colmn);
     if (i > 0) {
         cubes_height = 8 - i;
     } else {
+        // Next to stairs creatures walk up high: no made up ceiling there, only real ceiling cubes.
+        const SubtlCodedCoords stl_num = (SubtlCodedCoords)(mapblk - game.map);
+        if (subtile_next_to_layer_stairs(stl_num_decode_x(stl_num), stl_num_decode_y(stl_num)))
+            return LAYER_STAIRS_CEILING_SUBTILES * COORD_PER_STL;
         cubes_height = get_mapblk_filled_subtiles(mapblk);
     }
     return cubes_height << 8;
@@ -555,8 +607,12 @@ TbBool subtile_has_water_on_top(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 TbBool subtile_has_abyss_on_top(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
     long i;
+    // Dungeon layers: stairs are floor to walk on, even the landing step, which has no cubes at all.
+    if (layer_stairs_column_at(stl_x, stl_y) != NULL)
+        return false;
     i = get_top_cube_at(stl_x, stl_y, NULL);
-    return cube_is_abyss(i);
+    // A pit between dungeon layers works like an abyss whose bottom is the layer below.
+    return cube_is_abyss(i) || subtile_is_layer_fall_pit(stl_x, stl_y);
 }
 
 /**

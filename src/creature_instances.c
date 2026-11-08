@@ -25,6 +25,7 @@
 #include "config_sounds.h"
 
 #include "bflib_math.h"
+#include "bflib_planar.h"
 #include "thing_list.h"
 #include "thing_creature.h"
 #include "thing_effects.h"
@@ -54,6 +55,10 @@
 #include "gui_msgs.h"
 
 #include "keeperfx.hpp"
+#include "map_layer_dig.h"
+#include "map_layers.h"
+#include "engine_render.h"
+#include "creature_states_train.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -72,6 +77,7 @@ long instf_dig(struct Thing *creatng, int32_t *param);
 long instf_eat(struct Thing *creatng, int32_t *param);
 long instf_fart(struct Thing *creatng, int32_t *param);
 long instf_first_person_do_imp_task(struct Thing *creatng, int32_t *param);
+long instf_first_person_imp_tool(struct Thing *creatng, int32_t *param);
 long instf_pretty_path(struct Thing *creatng, int32_t *param);
 long instf_reinforce(struct Thing *creatng, int32_t *param);
 long instf_tortured(struct Thing *creatng, int32_t *param);
@@ -92,6 +98,7 @@ const struct NamedCommand creature_instances_func_type[] = {
   {"creature_tortured",        12},
   {"creature_tunnel",          13},
   {"none",                     14},
+  {"first_person_imp_tool",    15},
   {NULL,                       0},
 };
 
@@ -111,6 +118,7 @@ Creature_Instf_Func creature_instances_func_list[] = {
   instf_tortured,
   instf_tunnel,
   NULL,
+  instf_first_person_imp_tool,
   NULL,
 };
 
@@ -193,7 +201,16 @@ TbBool creature_instance_is_available(const struct Thing *thing, CrInstance inst
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     if (creature_control_invalid(cctrl))
         return false;
-    return cctrl->instance_available[inst_id];
+    if (!cctrl->instance_available[inst_id])
+        return false;
+    // Dungeon layers: digging floors and ceilings only shows up on maps with layers.
+    if (!map_has_layers())
+    {
+        const int mode = first_person_tool_mode(inst_id);
+        if ((mode == FPToolM_DigDown) || (mode == FPToolM_DigUp))
+            return false;
+    }
+    return true;
 }
 
 TbBool creature_choose_first_available_instance(struct Thing *thing)
@@ -448,6 +465,12 @@ void process_creature_instance(struct Thing *thing)
             {
                 SYNCDBG(18,"Executing %s for %s index %d.",creature_instance_code_name(cctrl->instance_id),thing_model_name(thing),(int)thing->index);
                 creature_instances_func_list[inst_inf->func_idx](thing, inst_inf->func_params);
+                // First person: a melee swing at a training post in the creature's own Training Room trains it.
+                if (((cctrl->instance_id == CrInst_SWING_WEAPON_SWORD) || (cctrl->instance_id == CrInst_SWING_WEAPON_FIST))
+                    && ((thing->alloc_flags & TAlF_IsControlled) != 0))
+                {
+                    first_person_train_at_post(thing, inst_inf->fp_time + inst_inf->fp_reset_time);
+                }
                 if (thing->creature.volley_repeat > 0)
                 {
                     return;
@@ -657,6 +680,20 @@ long instf_dig(struct Thing *creatng, int32_t *param)
     }
     struct MapTask* task = get_dungeon_task_list_entry(dungeon, task_idx);
     taskkind = task->kind;
+    // Dungeon layers: digging the floor between two layers.
+    if (taskkind == SDDigTask_DigLayerFloor)
+    {
+        struct ShotConfigStats* fshotst = get_shot_model_stats(ShM_Dig);
+        thing_play_sample(creatng, fshotst->dig.sndsample_idx + SOUND_RANDOM(fshotst->dig.sndsample_range), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+        create_effect(&creatng->mappos, fshotst->dig.effect_model, creatng->owner);
+        if (!layer_dig_floor_hit(creatng, cctrl->digger.task_stl))
+            return 0;
+        task_idx = find_dig_from_task_list(creatng->owner, cctrl->digger.task_stl);
+        if (task_idx >= 0)
+            remove_from_task_list(creatng->owner, task_idx);
+        thing_play_sample(creatng, snd_dig_impact + SOUND_RANDOM(snd_dig_impact_count), NORMAL_PITCH, 0, 3, 0, 4, FULL_LOUDNESS);
+        return 1;
+    }
     stl_x = stl_num_decode_x(cctrl->digger.task_stl);
     stl_y = stl_num_decode_y(cctrl->digger.task_stl);
     struct SlabMap* slb = get_slabmap_for_subtile(stl_x, stl_y);
@@ -880,6 +917,63 @@ long instf_eat(struct Thing *creatng, int32_t *param)
     return 1;
 }
 
+/**
+ * One step of wearing down the enemy floor (or enemy/neutral room) a possessed imp stands on.
+ * A room is stolen when its health runs out; the room's health is shown to the possessing player.
+ */
+static void first_person_convert_floor(struct Thing *creatng, struct PlayerInfo *player)
+{
+    struct SlabMap *slb = get_slabmap_block(subtile_slab(creatng->mappos.x.stl.num), subtile_slab(creatng->mappos.y.stl.num));
+    struct SlabConfigStats* slabst = get_slab_stats(slb);
+    instf_destroy(creatng, NULL);
+    if ((slabst->block_flags & SlbAtFlg_IsRoom) == 0)
+        return;
+    struct Room *room = room_get(slb->room_index);
+    if (room_is_invalid(room))
+        return;
+    if (room->owner != creatng->owner)
+    {
+        MapCoord coord_x = subtile_coord_center(room->central_stl_x);
+        MapCoord coord_y = subtile_coord_center(room->central_stl_y);
+        event_create_event_or_update_nearby_existing_event(coord_x, coord_y,
+            EvKind_RoomUnderAttack, room->owner, 0);
+        output_player_message(room->owner, SMsg_EnemyDestroyRooms, MESSAGE_DURATION_FIGHT);
+        if (game.active_messages_count > 0)
+        {
+            clear_messages_from_player(MsgType_Room, room->kind);
+        }
+        targeted_message_add(MsgType_Room, room->kind, player->id_number, 50, "%d/%d", room->health, compute_room_max_health(room->slabs_count, room->efficiency));
+    }
+    else
+    {
+        if (game.active_messages_count > 0)
+        {
+            clear_messages_from_player(MsgType_Room, room->kind);
+        }
+    }
+}
+
+/** The subtile one step ahead of a possessed imp, along the nearest of the four directions. */
+static void first_person_ahead_subtile(const struct Thing *creatng, MapSubtlCoord *stl_x, MapSubtlCoord *stl_y)
+{
+    *stl_x = creatng->mappos.x.stl.num;
+    *stl_y = creatng->mappos.y.stl.num;
+    if ((creatng->move_angle_xy >= ANGLE_NORTHWEST) || (creatng->move_angle_xy < ANGLE_NORTHEAST))
+        (*stl_y)--;
+    else if ((creatng->move_angle_xy >= ANGLE_SOUTHEAST) && (creatng->move_angle_xy <= ANGLE_SOUTHWEST))
+        (*stl_y)++;
+    else if ((creatng->move_angle_xy >= ANGLE_SOUTHWEST) && (creatng->move_angle_xy <= ANGLE_NORTHWEST))
+        (*stl_x)--;
+    else if ((creatng->move_angle_xy >= ANGLE_NORTHEAST) && (creatng->move_angle_xy <= ANGLE_SOUTHEAST))
+        (*stl_x)++;
+}
+
+/**
+ * The possessed imp's Dig. In order: drops or drags what it carries; claims the unclaimed path it stands
+ * on; with Shift held, reinforces the wall it faces and does nothing else; otherwise wears down the enemy
+ * floor or room it stands on; drops gold into its treasure room; and digs the wall it faces.
+ * Claim, Reinforce, Dig Down and Dig Up also have their own instances (instf_first_person_imp_tool).
+ */
 long instf_first_person_do_imp_task(struct Thing *creatng, int32_t *param)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
@@ -889,162 +983,237 @@ long instf_first_person_do_imp_task(struct Thing *creatng, int32_t *param)
     struct PlayerInfo* player = get_user_player(user);
     struct UserState* ustate = get_user_state(user);
     TRACE_THING(creatng);
-    struct SlabMap* slb;
-    MapSubtlCoord ahead_stl_x = creatng->mappos.x.stl.num;
-    MapSubtlCoord ahead_stl_y = creatng->mappos.y.stl.num;
-    MapSlabCoord slb_x = subtile_slab(creatng->mappos.x.stl.num);
-    MapSlabCoord slb_y = subtile_slab(creatng->mappos.y.stl.num);
-    if (check_place_to_pretty_excluding(creatng, slb_x, slb_y))
-    {
-        if (cctrl->dragtng_idx == 0)
-        {
-            instf_pretty_path(creatng, NULL);
-            return 1;
-        }
-    }
-    MapSlabCoord ahead_slb_x = slb_x;
-    MapSlabCoord ahead_slb_y = slb_y;
-    if ( (creatng->move_angle_xy >= ANGLE_NORTHWEST) || (creatng->move_angle_xy < ANGLE_NORTHEAST) )
-    {
-        ahead_stl_y--;
-        ahead_slb_y--;
-    }
-    else if ( (creatng->move_angle_xy >= ANGLE_SOUTHEAST) && (creatng->move_angle_xy <= ANGLE_SOUTHWEST) )
-    {
-        ahead_stl_y++;
-        ahead_slb_y++;
-    }
-    else if ( (creatng->move_angle_xy >= ANGLE_SOUTHWEST) && (creatng->move_angle_xy <= ANGLE_NORTHWEST) )
-    {
-        ahead_stl_x--;
-        ahead_slb_x--;
-    }
-    else if ( (creatng->move_angle_xy >= ANGLE_NORTHEAST) && (creatng->move_angle_xy <= ANGLE_SOUTHEAST) )
-    {
-        ahead_stl_x++;
-        ahead_slb_x++;
-    }
-    if ( (ustate->selected_fp_thing_pickup != 0) || (cctrl->dragtng_idx != 0) )
+    if ((ustate->selected_fp_thing_pickup != 0) || (cctrl->dragtng_idx != 0))
     {
         set_players_packet_action(player, PckA_DirectCtrlDragDrop, 0, 0, 0, 0);
         return 1;
     }
-    struct Room* room;
-    TbBool subtile_diggable = subtile_is_diggable_for_player(creatng->owner, ahead_stl_x, ahead_stl_y, true);
-    if (!subtile_diggable)
+    // Dig also does the Claim and Reinforce buttons' jobs, as in the original game: it claims the path it
+    // stands on, wears down enemy floor, and with Shift (creature-control modifier) held only reinforces.
     {
-        room = get_room_thing_is_on(creatng);
-        if (!room_is_invalid(room))
+        MapSlabCoord slb_x = 0;
+        MapSlabCoord slb_y = 0;
+        MapSubtlCoord stl_x = 0;
+        MapSubtlCoord stl_y = 0;
+        int colour = SLC_GREEN;
+        const int floor_kind = first_person_tool_target(creatng, FPToolM_Claim, &slb_x, &slb_y, &stl_x, &stl_y, &colour);
+        if (floor_kind == FPTool_Claim)
         {
-            if (room_role_matches(room->kind, RoRoF_GoldStorage))
-            {
-                if (room->owner == creatng->owner)
-                {
-                    TbBool slab_diggable = subtile_is_diggable_for_player(creatng->owner, slab_subtile_center(ahead_slb_x), slab_subtile_center(ahead_slb_y), true);
-                    if (!slab_diggable)
-                    {
-                        if (creatng->creature.gold_carried > 0)
-                        {
-                            set_players_packet_action(player, PckA_DirectCtrlDragDrop, 0, 0, 0, 0);
-                            return 1;
-                        }
-                    }
-                }
-            }
+            instf_pretty_path(creatng, NULL);
+            return 1;
         }
-    }
-    TbBool dig = true;
-    slb = get_slabmap_block(slb_x, slb_y);
-    if ( check_place_to_convert_excluding(creatng, slb_x, slb_y) )
-    {
-        if (!ustate->first_person_dig_claim_mode)
+        if (ustate->first_person_dig_claim_mode)
         {
-            struct SlabConfigStats* slabst = get_slab_stats(slb);
-            instf_destroy(creatng, NULL);
-            if (slabst->block_flags & SlbAtFlg_IsRoom)
+            if (first_person_tool_target(creatng, FPToolM_Reinforce, &slb_x, &slb_y, &stl_x, &stl_y, &colour) == FPTool_Reinforce)
             {
-                room = room_get(slb->room_index);
-                if (!room_is_invalid(room))
-                {
-                    if (room->owner != creatng->owner)
-                    {
-                        MapCoord coord_x = subtile_coord_center(room->central_stl_x);
-                        MapCoord coord_y = subtile_coord_center(room->central_stl_y);
-                        event_create_event_or_update_nearby_existing_event(coord_x, coord_y,
-                            EvKind_RoomUnderAttack, room->owner, 0);
-                        output_player_message(room->owner, SMsg_EnemyDestroyRooms, MESSAGE_DURATION_FIGHT);
-                        if (game.active_messages_count > 0)
-                        {
-                            clear_messages_from_player(MsgType_Room, room->kind);
-                        }
-                        targeted_message_add(MsgType_Room, room->kind, player->id_number, 50, "%d/%d", room->health, compute_room_max_health(room->slabs_count, room->efficiency));
-                    }
-                    else
-                    {
-                        if (game.active_messages_count > 0)
-                        {
-                            clear_messages_from_player(MsgType_Room, room->kind);
-                        }
-                    }
-                }
+                cctrl->digger.working_stl = get_subtile_number(stl_x, stl_y);
+                instf_reinforce(creatng, NULL);
             }
             return 1;
         }
-    }
-    else if (ustate->first_person_dig_claim_mode)
-    {
-        if (slabmap_owner(slb) == creatng->owner)
+        if (floor_kind == FPTool_Convert)
         {
-            TbBool reinforce = true;
-            MapSlabCoord ahead_sslb_x = subtile_slab(ahead_stl_x);
-            MapSlabCoord ahead_sslb_y = subtile_slab(ahead_stl_y);
-            if (!check_place_to_reinforce(creatng, ahead_sslb_x, ahead_sslb_y))
+            first_person_convert_floor(creatng, player);
+            return 1;
+        }
+    }
+    MapSubtlCoord ahead_stl_x = 0;
+    MapSubtlCoord ahead_stl_y = 0;
+    first_person_ahead_subtile(creatng, &ahead_stl_x, &ahead_stl_y);
+    const MapSlabCoord ahead_slb_x = subtile_slab(ahead_stl_x);
+    const MapSlabCoord ahead_slb_y = subtile_slab(ahead_stl_y);
+    if ((creatng->creature.gold_carried > 0) && !subtile_is_diggable_for_player(creatng->owner, ahead_stl_x, ahead_stl_y, true))
+    {
+        struct Room* room = get_room_thing_is_on(creatng);
+        if (!room_is_invalid(room) && room_role_matches(room->kind, RoRoF_GoldStorage) && (room->owner == creatng->owner))
+        {
+            if (!subtile_is_diggable_for_player(creatng->owner, slab_subtile_center(ahead_slb_x), slab_subtile_center(ahead_slb_y), true))
             {
-                struct ShotConfigStats* shotst = get_shot_model_stats(ShM_Dig);
-                unsigned char subtiles = 0;
-                do
-                {
-                    subtiles++;
-                    if (subtiles > (shotst->health - 1))
-                    {
-                        reinforce = false;
-                        break;
-                    }
-                    if ( (creatng->move_angle_xy >= ANGLE_NORTHWEST) || (creatng->move_angle_xy < ANGLE_NORTHEAST) )
-                    {
-                        ahead_stl_y--;
-                    }
-                    else if ( (creatng->move_angle_xy >= ANGLE_SOUTHEAST) && (creatng->move_angle_xy <= ANGLE_SOUTHWEST) )
-                    {
-                        ahead_stl_y++;
-                    }
-                    else if ( (creatng->move_angle_xy >= ANGLE_SOUTHWEST) && (creatng->move_angle_xy <= ANGLE_NORTHWEST) )
-                    {
-                        ahead_stl_x--;
-                    }
-                    else if ( (creatng->move_angle_xy >= ANGLE_NORTHEAST) && (creatng->move_angle_xy <= ANGLE_SOUTHEAST) )
-                    {
-                        ahead_stl_x++;
-                    }
-                    ahead_sslb_x = subtile_slab(ahead_stl_x);
-                    ahead_sslb_y = subtile_slab(ahead_stl_y);
-                }
-                while (!check_place_to_reinforce(creatng, ahead_sslb_x, ahead_sslb_y));
-            }
-            if (reinforce)
-            {
-                cctrl->digger.working_stl = get_subtile_number(ahead_stl_x, ahead_stl_y);
-                instf_reinforce(creatng, NULL);
+                set_players_packet_action(player, PckA_DirectCtrlDragDrop, 0, 0, 0, 0);
                 return 1;
             }
         }
-        dig = false;
     }
-    if (dig)
+    //TODO CONFIG shot model dependency
+    int32_t locparam = ShM_Dig;
+    instf_creature_fire_shot(creatng, &locparam);
+    return 1;
+}
+
+/**
+ * Works out what a first-person dig (instf_first_person_do_imp_task) would hit, for the cursor box.
+ * Render-side only: reads the map, changes nothing.
+ * @return FPDig_* kind; slab and colour (SLC_*) are written for anything but FPDig_None.
+ */
+int first_person_dig_target(const struct Thing *creatng, MapSlabCoord *out_slb_x, MapSlabCoord *out_slb_y, int *colour)
+{
+    if (!thing_exists(creatng))
+        return FPDig_None;
+    // The dig shot flies along the facing until it hits a wall; follow its path for its range.
+    const struct ShotConfigStats *shotst = get_shot_model_stats(ShM_Dig);
+    const long range = (long)max(shotst->health, 1) * max(shotst->speed, COORD_PER_STL) + COORD_PER_STL / 2;
+    const long step = COORD_PER_STL / 8;
+    for (long dist = step; dist <= range; dist += step)
     {
-        //TODO CONFIG shot model dependency
-        int32_t locparam = ShM_Dig;
-        instf_creature_fire_shot(creatng, &locparam);
+        const MapCoord pos_x = creatng->mappos.x.val + distance_with_angle_to_coord_x(dist, creatng->move_angle_xy);
+        const MapCoord pos_y = creatng->mappos.y.val + distance_with_angle_to_coord_y(dist, creatng->move_angle_xy);
+        const MapSubtlCoord hit_stl_x = coord_subtile(pos_x);
+        const MapSubtlCoord hit_stl_y = coord_subtile(pos_y);
+        if (subtile_coords_invalid(hit_stl_x, hit_stl_y))
+            return FPDig_None;
+        if (!subtile_is_wall(hit_stl_x, hit_stl_y))
+            continue;
+        *out_slb_x = subtile_slab(hit_stl_x);
+        *out_slb_y = subtile_slab(hit_stl_y);
+        *colour = subtile_is_diggable_for_player(creatng->owner, hit_stl_x, hit_stl_y, false) ? SLC_GREEN : SLC_RED;
+        return FPDig_Wall;
+    }
+    return FPDig_None;
+}
+
+int first_person_tool_mode(CrInstance inst_idx)
+{
+    if ((inst_idx <= 0) || (inst_idx >= game.conf.crtr_conf.instances_count))
+        return FPToolM_None;
+    const struct InstanceInfo *inst_inf = creature_instance_info_get(inst_idx);
+    if (creature_instance_info_invalid(inst_inf) || (creature_instances_func_list[inst_inf->func_idx] != instf_first_person_imp_tool))
+        return FPToolM_None;
+    return inst_inf->func_params[0];
+}
+
+TbBool creature_instance_is_first_person_imp_work(CrInstance inst_idx)
+{
+    return (inst_idx == CrInst_FIRST_PERSON_DIG) || (first_person_tool_mode(inst_idx) != FPToolM_None);
+}
+
+/**
+ * Works out what a possessed imp's tool (FPToolM_* mode) would work on. Used by the instance and,
+ * render-side, by the cursor box; changes nothing.
+ * - Claim: the enemy floor or room the imp stands on (convert/steal), else the unclaimed path it stands on.
+ * - Reinforce: the first wall along its facing within the dig range.
+ * - Dig down: the floor of the tile ahead, else of its own tile. Dig up: the ceiling over it, else over the tile ahead.
+ * @return FPTool_* kind; slab, subtile and colour (SLC_*) are written for anything but FPTool_None.
+ */
+int first_person_tool_target(const struct Thing *creatng, int mode, MapSlabCoord *out_slb_x, MapSlabCoord *out_slb_y, MapSubtlCoord *out_stl_x, MapSubtlCoord *out_stl_y, int *colour)
+{
+    if (!thing_exists(creatng))
+        return FPTool_None;
+    // The check_place_* helpers take a non-const thing but only read.
+    struct Thing *thing = (struct Thing *)creatng;
+    const MapSubtlCoord stl_x = creatng->mappos.x.stl.num;
+    const MapSubtlCoord stl_y = creatng->mappos.y.stl.num;
+    const MapSlabCoord slb_x = subtile_slab(stl_x);
+    const MapSlabCoord slb_y = subtile_slab(stl_y);
+    *out_slb_x = slb_x;
+    *out_slb_y = slb_y;
+    *out_stl_x = stl_x;
+    *out_stl_y = stl_y;
+    *colour = SLC_GREEN;
+    switch (mode)
+    {
+    case FPToolM_Claim:
+        if (check_place_to_convert_excluding(thing, slb_x, slb_y))
+        {
+            *colour = SLC_YELLOW;
+            return FPTool_Convert;
+        }
+        if (check_place_to_pretty_excluding(thing, slb_x, slb_y))
+            return FPTool_Claim;
+        return FPTool_None;
+    case FPToolM_Reinforce:
+    {
+        // Follow the facing, like the dig shot, to the first wall in range.
+        const struct ShotConfigStats *shotst = get_shot_model_stats(ShM_Dig);
+        const long range = (long)max(shotst->health, 1) * max(shotst->speed, COORD_PER_STL) + COORD_PER_STL / 2;
+        const long step = COORD_PER_STL / 8;
+        for (long dist = step; dist <= range; dist += step)
+        {
+            const MapCoord pos_x = creatng->mappos.x.val + distance_with_angle_to_coord_x(dist, creatng->move_angle_xy);
+            const MapCoord pos_y = creatng->mappos.y.val + distance_with_angle_to_coord_y(dist, creatng->move_angle_xy);
+            const MapSubtlCoord hit_stl_x = coord_subtile(pos_x);
+            const MapSubtlCoord hit_stl_y = coord_subtile(pos_y);
+            if (subtile_coords_invalid(hit_stl_x, hit_stl_y))
+                return FPTool_None;
+            if (!subtile_is_wall(hit_stl_x, hit_stl_y))
+                continue;
+            *out_slb_x = subtile_slab(hit_stl_x);
+            *out_slb_y = subtile_slab(hit_stl_y);
+            *out_stl_x = hit_stl_x;
+            *out_stl_y = hit_stl_y;
+            if (check_place_to_reinforce(thing, *out_slb_x, *out_slb_y) > 0)
+                return FPTool_Reinforce;
+            *colour = SLC_RED;
+            return FPTool_Blocked;
+        }
+        return FPTool_None;
+    }
+    case FPToolM_DigDown:
+    case FPToolM_DigUp:
+    {
+        if (!map_has_layers())
+            return FPTool_None;
+        const TbBool up = (mode == FPToolM_DigUp);
+        MapSubtlCoord ahead_stl_x = 0;
+        MapSubtlCoord ahead_stl_y = 0;
+        first_person_ahead_subtile(creatng, &ahead_stl_x, &ahead_stl_y);
+        const MapSlabCoord ahead_slb_x = subtile_slab(ahead_stl_x);
+        const MapSlabCoord ahead_slb_y = subtile_slab(ahead_stl_y);
+        // Down prefers the tile ahead (so the imp does not drop through), up prefers the ceiling over the imp.
+        const MapSlabCoord try_x[2] = {up ? slb_x : ahead_slb_x, up ? ahead_slb_x : slb_x};
+        const MapSlabCoord try_y[2] = {up ? slb_y : ahead_slb_y, up ? ahead_slb_y : slb_y};
+        for (int i = 0; i < 2; i++)
+        {
+            if (layer_first_person_dig_possible(creatng->owner, try_x[i], try_y[i], up))
+            {
+                *out_slb_x = try_x[i];
+                *out_slb_y = try_y[i];
+                *out_stl_x = slab_subtile_center(try_x[i]);
+                *out_stl_y = slab_subtile_center(try_y[i]);
+                return FPTool_DigVertical;
+            }
+        }
+        return FPTool_None;
+    }
+    default:
+        return FPTool_None;
+    }
+}
+
+/**
+ * A possessed imp's tool, one per job; the config Function parameter picks the FPToolM_* mode:
+ * claim (and convert enemy floor / steal rooms), reinforce, dig down, dig up.
+ */
+long instf_first_person_imp_tool(struct Thing *creatng, int32_t *param)
+{
+    TRACE_THING(creatng);
+    struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
+    const NetUserId user = get_user_controlling_thing(creatng, UCT_Direct | UCT_Other);
+    if (user < 0)
+        return 0;
+    struct PlayerInfo* player = get_user_player(user);
+    const int mode = (param != NULL) ? param[0] : FPToolM_None;
+    MapSlabCoord slb_x = 0;
+    MapSlabCoord slb_y = 0;
+    MapSubtlCoord stl_x = 0;
+    MapSubtlCoord stl_y = 0;
+    int colour = SLC_GREEN;
+    switch (first_person_tool_target(creatng, mode, &slb_x, &slb_y, &stl_x, &stl_y, &colour))
+    {
+    case FPTool_Convert:
+        first_person_convert_floor(creatng, player);
+        break;
+    case FPTool_Claim:
+        instf_pretty_path(creatng, NULL);
+        break;
+    case FPTool_Reinforce:
+        cctrl->digger.working_stl = get_subtile_number(stl_x, stl_y);
+        instf_reinforce(creatng, NULL);
+        break;
+    case FPTool_DigVertical:
+        layer_first_person_dig(creatng, slb_x, slb_y, (mode == FPToolM_DigUp));
+        break;
+    default:
+        break;
     }
     return 1;
 }

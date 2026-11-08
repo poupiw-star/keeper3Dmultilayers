@@ -56,6 +56,7 @@
 #include "keeperfx.hpp"
 #include "player_instances.h"
 #include "packets.h"
+#include "map_layer_dig.h"
 #include "post_inc.h"
 #include "creature_states_lair.h"
 
@@ -1131,7 +1132,9 @@ short imp_digs_mines(struct Thing *spdigtng)
     pos.x.val = subtile_coord_center(stl_x);
     pos.y.val = subtile_coord_center(stl_y);
     pos.z.val = 0;
-    if (creature_turn_to_face(spdigtng, &pos) > 0)
+    // Dungeon layers: digging from the layer above or below, face the spot on the imp's own layer.
+    layer_dig_face_position(spdigtng, &pos);
+    if ((get_chessboard_distance(&spdigtng->mappos, &pos) > COORD_PER_STL / 2) && (creature_turn_to_face(spdigtng, &pos) > 0))
     {
       return 1;
     }

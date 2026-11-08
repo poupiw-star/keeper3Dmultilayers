@@ -39,6 +39,8 @@
 #include "game_legacy.h"
 #include "player_data.h"
 #include "local_camera.h"
+#include "map_connectors.h"
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -65,6 +67,14 @@ void reset_interpolation_of_thing(struct Thing *thing)
 
 TbBool creature_can_navigate_to_with_storage_f(const struct Thing *creatng, const struct Coord3d *pos, NaviRouteFlags flags, const char *func_name)
 {
+    // Dungeon layers: on another layer, the route stored is the one to the first connector on the way.
+    if (creature_target_on_other_layer(creatng, pos))
+    {
+        struct Coord3d hop;
+        if (!layer_route_next_hop(creatng, pos, &hop))
+            return false;
+        return (ariadne_initialise_creature_route_f((struct Thing*)creatng, &hop, get_creature_speed(creatng), flags, func_name) == AridRet_OK);
+    }
     NAVIDBG(8,"%s: Route for %s index %d from %3d,%3d to %3d,%3d", func_name, thing_model_name(creatng),(int)creatng->index,
         (int)creatng->mappos.x.stl.num, (int)creatng->mappos.y.stl.num, (int)pos->x.stl.num, (int)pos->y.stl.num);
     AriadneReturn aret = ariadne_initialise_creature_route_f((struct Thing*)creatng, pos, get_creature_speed(creatng), flags, func_name);
@@ -427,6 +437,12 @@ TbBool terrain_toxic_for_creature_at_position(const struct Thing *creatng, MapSu
  */
 TbBool creature_can_navigate_to_f(const struct Thing *thing, struct Coord3d *dstpos, NaviRouteFlags flags, const char *func_name)
 {
+    // Dungeon layers: another layer can be reached if there is a way through connectors.
+    if (creature_target_on_other_layer(thing, dstpos))
+    {
+        struct Coord3d hop;
+        return layer_route_next_hop(thing, dstpos, &hop);
+    }
     long waypoints_num = ariadne_count_waypoints_on_creature_route_to_target_f(thing, &thing->mappos, dstpos, flags, func_name);
     return (waypoints_num > 0);
 }
@@ -514,7 +530,53 @@ long creature_turn_to_face_angle(struct Thing *thing, long angle)
     return get_angle_difference(thing->move_angle_xy, angle);
 }
 
+static long creature_move_to_using_gates_on_layer(struct Thing *thing, struct Coord3d *pos, MoveSpeed speed, long a4, NaviRouteFlags flags, TbBool backward);
+
+/**
+ * Dungeon layers: moving to a position on another layer. The creature walks to the next connector on the
+ * way (kept as the end of its stored route, and chosen again now and then), and crosses it on arrival.
+ * The caller keeps asking for the final position, so this goes on until the creature is on its layer.
+ */
+static long creature_move_to_other_layer(struct Thing *thing, struct Coord3d *pos, MoveSpeed speed, long a4, NaviRouteFlags flags, TbBool backward)
+{
+    struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
+    struct Coord3d hop = cctrl->arid.endpos;
+    if (!layer_route_hop_still_valid(thing, &hop) || (((game.play_gameturn + thing->index) & 31) == 0))
+    {
+        if (!layer_route_next_hop(thing, pos, &hop))
+        {
+            creature_set_speed(thing, 0);
+            return -1;
+        }
+    }
+    // Already standing on the connector's climb spot: cross it. Any spot along the climb row will do
+    // (on stairs the whole top row and landing): next to a stairwell, a big creature can't get to the
+    // exact middle of the landing.
+    if ((coord_slab(thing->mappos.x.val) == coord_slab(hop.x.val)) && (coord_slab(thing->mappos.y.val) == coord_slab(hop.y.val))
+        && creature_start_layer_climb(thing))
+    {
+        return 0;
+    }
+    long result = creature_move_to_using_gates_on_layer(thing, &hop, speed, a4, flags, backward);
+    if (result == 1)
+    {
+        creature_start_layer_climb(thing);
+        return 0;
+    }
+    return result;
+}
+
 long creature_move_to_using_gates(struct Thing *thing, struct Coord3d *pos, MoveSpeed speed, long a4, NaviRouteFlags flags, TbBool backward)
+{
+    // Climbing between layers: it can't walk until it is off the connector.
+    if (creature_is_climbing_layers(thing))
+        return 0;
+    if (creature_target_on_other_layer(thing, pos))
+        return creature_move_to_other_layer(thing, pos, speed, a4, flags, backward);
+    return creature_move_to_using_gates_on_layer(thing, pos, speed, a4, flags, backward);
+}
+
+static long creature_move_to_using_gates_on_layer(struct Thing *thing, struct Coord3d *pos, MoveSpeed speed, long a4, NaviRouteFlags flags, TbBool backward)
 {
     long i;
     SYNCDBG(18,"Starting to move %s index %d from (%d,%d) to (%d,%d) with speed %d",thing_model_name(thing),

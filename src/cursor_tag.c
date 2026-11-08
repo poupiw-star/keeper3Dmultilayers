@@ -35,6 +35,7 @@
 #include "thing_creature.h"
 #include "packets.h"
 #include "local_camera.h"
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -202,7 +203,7 @@ TbBool tag_cursor_blocks_place_door(PlayerNumber plyr_idx, NetUserId user, MapSu
                 break;
             }
         }
-        if ( ( (slabmap_owner(slb) == plyr_idx) && (slb->kind == SlbT_CLAIMED) )
+        if ( ( (slabmap_owner(slb) == plyr_idx) && (slb->kind == SlbT_CLAIMED) && !slab_is_layer_pit(slb_x, slb_y) )
             && (Orientation != -1) && ( Check ) 
             && (!slab_has_door_thing_on(slb_x, slb_y)) )
         {

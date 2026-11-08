@@ -59,6 +59,7 @@ enum DoorModelFlags {
     DoMF_Secret         = 0x0002,
     DoMF_Thick          = 0x0004,
     DoMF_Midas          = 0x0008,
+    DoMF_Ladder         = 0x0010, // Dungeon layers: the door is a ladder to the same tile on the layer above.
 };
 
 struct TrapConfigStats {

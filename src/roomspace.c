@@ -35,6 +35,7 @@
 #include "frontmenu_ingame_tabs.h"
 
 #include "keeperfx.hpp"
+#include "map_layers.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1237,7 +1238,6 @@ void process_sell_roomspace_inputs(PlayerNumber plyr_idx)
 void process_highlight_roomspace_inputs(PlayerNumber plyr_idx)
 {
     struct PlayerInfo* player = get_player(plyr_idx);
-    const struct UserState* ustate = get_local_user_state_prediction();
     if (is_game_key_pressed(Gkey_BestRoomSpace, false, true)) {
         set_players_packet_action(player, PckA_SetRoomspaceHighlight, settings.highlight_mode ^ 1, settings.highlight_mode, 0, 0);
         reset_roomspace = true;
@@ -1247,10 +1247,7 @@ void process_highlight_roomspace_inputs(PlayerNumber plyr_idx)
         reset_roomspace = true;
         return;
     } else if (is_game_key_pressed(Gkey_SellTrapOnSubtile, false, true)) {
-        if (ustate->primary_cursor_state == CSt_PowerHand && ustate->roomspace_mode != single_subtile_mode) {
-            set_players_packet_action(player, PckA_SetRoomspaceSubtile, 0, 0, 0, 0);
-            reset_roomspace = true;
-        }
+        // Dungeon layers: with the hand, Alt is now "dig up" (see update_dig_tag_input), not the subtile cursor.
         return;
     } else {
         int par2 = numpad_to_value(false);
@@ -1309,8 +1306,7 @@ TbBool roomspace_can_build_room_at_slab(const struct RoomSpace *roomspace, MapSl
     if (!subtile_revealed(slab_subtile_center(slb_x), slab_subtile_center(slb_y), plyr_idx)) {
         return false;
     }
-    struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
-    if (!room_can_build_on_bridge_slab(rkind, slb->kind)) {
+    if (!room_can_build_on_bridge_slab_at(rkind, slb_x, slb_y)) {
         return false;
     }
     struct UserState* ustate = get_user_state(roomspace->user);
@@ -1456,7 +1452,7 @@ TbBool roomspace_slab_blocks_bridge(PlayerNumber plyr_idx, MapSlabCoord slb_x, M
         return true;
     }
     struct SlabMap *slb = get_slabmap_block(slb_x, slb_y);
-    if (!slab_kind_is_bridgeable(slb->kind))
+    if (!slab_is_bridgeable_at(slb_x, slb_y))
     {
         if ((slabmap_owner(slb)) != plyr_idx)
         {

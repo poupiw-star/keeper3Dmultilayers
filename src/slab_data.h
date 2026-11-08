@@ -191,6 +191,8 @@ void do_unprettying(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_
 
 TbBool slab_kind_has_no_ownership(SlabKind slbkind);
 
+TbBool slab_is_bridgeable_at(MapSlabCoord slb_x, MapSlabCoord slb_y);
+TbBool room_can_build_on_bridge_slab_at(RoomKind rkind, MapSlabCoord slb_x, MapSlabCoord slb_y);
 TbBool players_land_by_bridgeable_slab(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y);
 TbBool slab_by_players_land(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y);
 TbBool player_can_claim_slab(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y);
